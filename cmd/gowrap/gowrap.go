@@ -8,14 +8,10 @@ import (
 	"os"
 
 	"github.com/hexdigest/gowrap"
-	"github.com/hexdigest/gowrap/loader"
 )
 
 func init() {
-	ldr := loader.New(nil)
-
-	gowrap.RegisterCommand("gen", gowrap.NewGenerateCommand(ldr))
-	gowrap.RegisterCommand("template", gowrap.NewTemplateCommand(ldr))
+	gowrap.RegisterCommand("gen", gowrap.NewGenerateCommand())
 }
 
 func main() {

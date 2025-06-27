@@ -24,21 +24,18 @@ type GenerateCommand struct {
 	BaseCommand
 
 	interfaceName string
-	template      string
 	outputFile    string
 	sourcePkg     string
 	noGenerate    bool
 	vars          vars
 	localPrefix   string
 
-	loader   templateLoader
 	filepath fs
 }
 
 // NewGenerateCommand creates GenerateCommand
-func NewGenerateCommand(l remoteTemplateLoader) *GenerateCommand {
+func NewGenerateCommand() *GenerateCommand {
 	gc := &GenerateCommand{
-		loader: loader{fileReader: os.ReadFile, remoteLoader: l},
 		filepath: fs{
 			Rel:       filepath.Rel,
 			Abs:       filepath.Abs,
@@ -53,8 +50,6 @@ func NewGenerateCommand(l remoteTemplateLoader) *GenerateCommand {
 	fs.StringVar(&gc.interfaceName, "i", "", `the source interface name, i.e. "Reader"`)
 	fs.StringVar(&gc.sourcePkg, "p", "", "the source package import path, i.e. \"io\", \"github.com/hexdigest/gowrap\" or\na relative import path like \"./generator\"")
 	fs.StringVar(&gc.outputFile, "o", "", "the output file name")
-	fs.StringVar(&gc.template, "t", "", "the template to use, it can be an HTTPS URL, local file or a\nreference to a template in gowrap repository,\n"+
-		"run `gowrap template list` for details")
 	fs.Var(&gc.vars, "v", "a key-value pair to parametrize the template,\narguments without an equal sign are treated as a bool values,\ni.e. -v foo=bar -v disableChecks")
 	fs.StringVar(&gc.localPrefix, "l", "", "put imports beginning with this string after 3rd-party packages; comma-separated list")
 
@@ -115,10 +110,6 @@ func (gc *GenerateCommand) checkFlags() error {
 		return errNoInterfaceName
 	}
 
-	if gc.template == "" {
-		return errNoTemplate
-	}
-
 	return nil
 }
 
@@ -158,50 +149,8 @@ func (gc *GenerateCommand) getOptions() (*generator.Options, error) {
 	return &options, err
 }
 
-type readerFunc func(path string) ([]byte, error)
-
-type loader struct {
-	fileReader   readerFunc
-	remoteLoader templateLoader
-}
-
 func (gc *GenerateCommand) loadTemplate(outputFileDir string) (contents, url string, err error) {
-	body, url, err := gc.loader.Load(gc.template)
-	if err != nil {
-		return "", "", errors.Wrap(err, "failed to load template")
-	}
-
-	if !strings.HasPrefix(url, "https://") {
-		templatePath, err := gc.filepath.Abs(url)
-		if err != nil {
-			return "", "", err
-		}
-
-		url, err = gc.filepath.Rel(outputFileDir, templatePath)
-		if err != nil {
-			return "", "", err
-		}
-	}
-
-	return string(body), url, nil
-}
-
-// Load implements templateLoader
-func (l loader) Load(template string) (tmpl []byte, url string, err error) {
-	tmpl, err = l.fileReader(template)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return
-		}
-
-		return l.remoteLoader.Load(template)
-	}
-
-	return tmpl, template, err
-}
-
-type templateLoader interface {
-	Load(path string) (tmpl []byte, url string, err error)
+	return datadogTemplate, "datadog", nil
 }
 
 type fs struct {
@@ -313,4 +262,59 @@ import(
 {{range $import := .Options.Imports}}{{$import}}
 	{{end}}
 )
+`
+
+const datadogTemplate = `import (
+    "context"
+
+    "gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
+    "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/ext"
+    "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+)
+
+{{ $decorator := (or .Vars.DecoratorName (printf "%sWithTracing" .Interface.Name)) }}
+{{ $spanNameType := (or .Vars.SpanNamePrefix .Interface.Name) }}
+
+// {{$decorator}} implements {{.Interface.Name}} interface instrumented with Datadog tracing
+type {{$decorator}} struct {
+  {{.Interface.Type}}
+  _instance string
+  _spanDecorator func(span ddtrace.Span, params, results map[string]interface{})
+}
+
+// New{{$decorator}} returns {{$decorator}}
+func New{{$decorator}} (base {{.Interface.Type}}, instance string, spanDecorator ...func(span ddtrace.Span, params, results map[string]interface{})) {{$decorator}} {
+  d := {{$decorator}} {
+    {{.Interface.Name}}: base,
+    _instance: instance,
+  }
+
+  if len(spanDecorator) > 0 && spanDecorator[0] != nil {
+    d._spanDecorator = spanDecorator[0]
+  }
+
+  return d
+}
+
+{{range $method := .Interface.Methods}}
+  {{if $method.AcceptsContext}}
+    // {{$method.Name}} implements {{$.Interface.Name}}
+func (_d {{$decorator}}) {{$method.Declaration}} {
+  span, ctx := tracer.StartSpanFromContext(ctx, "{{$spanNameType}}.{{$method.Name}}")
+  span.SetTag(ext.ServiceName, _d._instance)
+  defer func() {
+    if _d._spanDecorator != nil {
+      _d._spanDecorator(span, {{$method.ParamsMap}}, {{$method.ResultsMap}})
+    }{{- if $method.ReturnsError}} else if err != nil {
+      span.SetTag(ext.Error, err)
+      span.SetTag(ext.ErrorMsg, err.Error())
+      span.SetTag(ext.ErrorType, "error")
+    }
+    {{end}}
+    span.Finish()
+  }()
+  {{$method.Pass (printf "_d.%s." $.Interface.Name) }}
+}
+  {{end}}
+{{end}}
 `
