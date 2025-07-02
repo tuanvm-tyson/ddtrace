@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/hexdigest/gowrap"
+	"github.com/tyson-tuanvm/gowrap"
 )
 
 func init() {

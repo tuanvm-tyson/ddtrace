@@ -1,4 +1,4 @@
-module github.com/hexdigest/gowrap
+module github.com/tyson-tuanvm/gowrap
 
 go 1.23.0
 

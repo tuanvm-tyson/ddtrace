@@ -8,9 +8,9 @@ import (
 	"time"
 
 	minimock "github.com/gojuno/minimock/v3"
-	"github.com/hexdigest/gowrap/generator"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/tyson-tuanvm/gowrap/generator"
 )
 
 func TestNewGenerateCommand(t *testing.T) {
