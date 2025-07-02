@@ -1,4 +1,4 @@
-package gowrap
+package ddtrace
 
 import (
 	"testing"

@@ -1,4 +1,4 @@
-module github.com/tyson-tuanvm/gowrap/tools
+module github.com/tyson-tuanvm/ddtrace/tools
 
 go 1.23.0
 

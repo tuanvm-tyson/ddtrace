@@ -15,7 +15,7 @@
 # Goreleaser artifacts
 /dist
 /.gh_token
-/gowrap
+/ddtrace
 
 # Editors
 .idea

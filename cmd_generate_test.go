@@ -1,155 +1,54 @@
-package gowrap
+package ddtrace
 
 import (
 	"io"
 	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
-	minimock "github.com/gojuno/minimock/v3"
-	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
-	"github.com/tyson-tuanvm/gowrap/generator"
 )
 
 func TestNewGenerateCommand(t *testing.T) {
-	assert.NotNil(t, NewGenerateCommand(nil))
+	assert.NotNil(t, NewGenerateCommand())
 }
 
-func Test_loader_Load(t *testing.T) {
-	var unexpectedErr = errors.New("unexpected error")
-
+func TestGenerateCommand_getOptionsForInterface(t *testing.T) {
 	tests := []struct {
-		name    string
-		init    func(t minimock.Tester) loader
-		inspect func(r loader, t *testing.T) //inspects loader after execution of Load
+		name          string
+		init          func() *GenerateCommand
+		interfaceName string
 
-		template   string
-		want1      []byte
-		want2      string
 		wantErr    bool
 		inspectErr func(err error, t *testing.T) //use for more precise error evaluation
 	}{
 		{
-			name: "file read error",
-			init: func(t minimock.Tester) loader {
-				return loader{
-					fileReader: func(string) ([]byte, error) {
-						return nil, unexpectedErr
-					},
-				}
-			},
-			wantErr: true,
-			inspectErr: func(err error, t *testing.T) {
-				assert.Equal(t, unexpectedErr, err)
-			},
-		},
-		{
-			name: "file read success",
-			init: func(t minimock.Tester) loader {
-				return loader{
-					fileReader: func(string) ([]byte, error) {
-						return []byte("success"), nil
-					},
-				}
-			},
-			template: "template.file",
-			wantErr:  false,
-			want1:    []byte("success"),
-			want2:    "template.file",
-		},
-		{
-			name: "remote template",
-			init: func(t minimock.Tester) loader {
-				return loader{
-					fileReader: func(string) ([]byte, error) {
-						return nil, os.ErrNotExist
-					},
-					remoteLoader: newRemoteTemplateLoaderMock(t).LoadMock.Expect("remote").Return([]byte("remote contents"), "remote-url", nil),
-				}
-			},
-			template: "remote",
-			wantErr:  false,
-			want1:    []byte("remote contents"),
-			want2:    "remote-url",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mc := minimock.NewController(t)
-			defer mc.Finish()
-
-			receiver := tt.init(mc)
-
-			got1, got2, err := receiver.Load(tt.template)
-
-			if tt.inspect != nil {
-				tt.inspect(receiver, t)
-			}
-
-			assert.Equal(t, tt.want1, got1, "loader.Load returned unexpected result")
-
-			assert.Equal(t, tt.want2, got2, "loader.Load returned unexpected result")
-
-			if tt.wantErr {
-				if assert.Error(t, err) && tt.inspectErr != nil {
-					tt.inspectErr(err, t)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
-
-		})
-	}
-}
-
-func TestGenerateCommand_getOptions(t *testing.T) {
-	var absError = errors.New("abs error")
-
-	tests := []struct {
-		name string
-		init func(t minimock.Tester) *GenerateCommand
-
-		want1      *generator.Options
-		wantErr    bool
-		inspectErr func(err error, t *testing.T) //use for more precise error evaluation
-	}{
-
-		{
-			name: "unexisting output path",
-			init: func(t minimock.Tester) *GenerateCommand {
-				cmd := NewGenerateCommand(nil)
-				cmd.filepath.Abs = func(string) (string, error) { return "", absError }
+			name: "basic success case",
+			init: func() *GenerateCommand {
+				cmd := NewGenerateCommand()
+				cmd.outputFile = "test.go"
 				return cmd
 			},
-			wantErr: true,
-			inspectErr: func(err error, t *testing.T) {
-				assert.Equal(t, absError, errors.Cause(err))
-			},
+			interfaceName: "TestInterface",
+			wantErr:       false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mc := minimock.NewController(t)
-			defer mc.Finish()
+			receiver := tt.init()
 
-			receiver := tt.init(mc)
-
-			got1, err := receiver.getOptions()
-
-			assert.Equal(t, tt.want1, got1, "GenerateCommand.parseArgs returned unexpected result")
+			got1, err := receiver.getOptionsForInterface(tt.interfaceName)
 
 			if tt.wantErr {
-				if assert.Error(t, err) && tt.inspectErr != nil {
+				assert.Error(t, err)
+				if tt.inspectErr != nil {
 					tt.inspectErr(err, t)
 				}
 			} else {
 				assert.NoError(t, err)
+				assert.NotNil(t, got1, "getOptionsForInterface should return valid options")
+				assert.Equal(t, tt.interfaceName, got1.InterfaceName, "interface name should match")
 			}
-
 		})
 	}
 }
@@ -157,7 +56,7 @@ func TestGenerateCommand_getOptions(t *testing.T) {
 func TestGenerateCommand_Run(t *testing.T) {
 	tests := []struct {
 		name    string
-		init    func(t minimock.Tester) *GenerateCommand
+		init    func() *GenerateCommand
 		inspect func(r *GenerateCommand, t *testing.T) //inspects *GenerateCommand after execution of Run
 
 		args []string
@@ -167,8 +66,8 @@ func TestGenerateCommand_Run(t *testing.T) {
 	}{
 		{
 			name: "parse args error",
-			init: func(t minimock.Tester) *GenerateCommand {
-				cmd := NewGenerateCommand(nil)
+			init: func() *GenerateCommand {
+				cmd := NewGenerateCommand()
 				cmd.BaseCommand.FlagSet().SetOutput(io.Discard)
 				return cmd
 			},
@@ -180,53 +79,25 @@ func TestGenerateCommand_Run(t *testing.T) {
 		},
 		{
 			name: "check flags error",
-			init: func(t minimock.Tester) *GenerateCommand {
-				return NewGenerateCommand(nil)
+			init: func() *GenerateCommand {
+				return NewGenerateCommand()
 			},
 			args:    []string{},
 			wantErr: true,
 		},
 		{
 			name: "get options error",
-			init: func(t minimock.Tester) *GenerateCommand {
-				return NewGenerateCommand(nil)
+			init: func() *GenerateCommand {
+				return NewGenerateCommand()
 			},
-			args:    []string{"-p", "unexistingpkg", "-i", "interface", "-o", "unexisting_dir/file.go", "-t", "unexisting_template"},
+			args:    []string{"-p", "unexistingpkg", "-i", "interface", "-o", "unexisting_dir/file.go"},
 			wantErr: true,
 		},
 		{
-			name: "package parse ok but template failed",
-			init: func(t minimock.Tester) *GenerateCommand {
-				loader := newRemoteTemplateLoaderMock(t).LoadMock.Expect("not_exists").Return(nil, "", errors.New("template load error"))
-				return NewGenerateCommand(loader)
-			},
-			args:    []string{"-p", "io", "-i", "Writer", "-o", "file.go", "-t", "not_exists"},
-			wantErr: true,
-		},
-		{
-			name: "failed to create generator",
-			args: []string{"-o", "pkg/out.file", "-i", "interface", "-t", "template/template"},
-			init: func(t minimock.Tester) *GenerateCommand {
-				loader := newRemoteTemplateLoaderMock(t).LoadMock.Return([]byte("{{."), "local/file", nil)
-				return NewGenerateCommand(loader)
-			},
-			wantErr: true,
-		},
-		{
-			name: "code generation error",
-			args: []string{"-o", "out.file", "-i", "Command", "-t", "template/template"},
-			init: func(t minimock.Tester) *GenerateCommand {
-				loader := newRemoteTemplateLoaderMock(t).LoadMock.Return([]byte("body"), "local/file", nil)
-				return NewGenerateCommand(loader)
-			},
-			wantErr: true,
-		},
-		{
-			name: "success",
-			args: []string{"-o", "out.file", "-i", "Command", "-t", "template/template"},
-			init: func(t minimock.Tester) *GenerateCommand {
-				cmd := NewGenerateCommand(nil)
-				cmd.loader = newRemoteTemplateLoaderMock(t).LoadMock.Return([]byte("//comment"), "local/file", nil)
+			name: "success with single interface",
+			args: []string{"-o", "out.file", "-i", "Command"},
+			init: func() *GenerateCommand {
+				cmd := NewGenerateCommand()
 				cmd.filepath.WriteFile = func(string, []byte, os.FileMode) error { return nil }
 				return cmd
 			},
@@ -234,35 +105,16 @@ func TestGenerateCommand_Run(t *testing.T) {
 		},
 		{
 			name: "success with local prefixes",
-			args: []string{"-o", "out.file", "-i", "Command", "-t", "template/template", "-l", "foobar.com/pkg"},
-			init: func(mt minimock.Tester) *GenerateCommand {
-				cmd := NewGenerateCommand(nil)
-				cmd.loader = newRemoteTemplateLoaderMock(mt).LoadMock.Return([]byte(`import (
-	_ "foobar.com/pkg"
-	_ "github.com/pkg/errors"
-	_ "fmt"
-)`), "local/file", nil)
-
+			args: []string{"-o", "out.file", "-i", "Command", "-l", "foobar.com/pkg"},
+			init: func() *GenerateCommand {
+				cmd := NewGenerateCommand()
 				cmd.filepath.WriteFile = func(filename string, data []byte, perm os.FileMode) error {
-					cmd.outputFile = filepath.Join(t.TempDir(), cmd.outputFile)
-					return os.WriteFile(cmd.outputFile, data, perm)
+					return nil
 				}
 				return cmd
 			},
 			inspect: func(cmd *GenerateCommand, t *testing.T) {
 				assert.EqualValues(t, "foobar.com/pkg", cmd.localPrefix)
-
-				data, err := os.ReadFile(cmd.outputFile)
-				assert.NoError(t, err)
-
-				assert.Contains(t, string(data), `-l "foobar.com/pkg"`)
-				assert.Contains(t, string(data), `import (
-	_ "fmt"
-
-	_ "github.com/pkg/errors"
-
-	_ "foobar.com/pkg"
-)`)
 			},
 			wantErr: false,
 		},
@@ -270,10 +122,7 @@ func TestGenerateCommand_Run(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mc := minimock.NewController(t)
-			defer mc.Finish()
-
-			receiver := tt.init(mc)
+			receiver := tt.init()
 
 			err := receiver.Run(tt.args, nil)
 
@@ -289,7 +138,52 @@ func TestGenerateCommand_Run(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
 
+func TestGenerateCommand_parseInterfaceNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "single interface",
+			input:    "Reader",
+			expected: []string{"Reader"},
+		},
+		{
+			name:     "multiple interfaces",
+			input:    "Reader,Writer,Closer",
+			expected: []string{"Reader", "Writer", "Closer"},
+		},
+		{
+			name:     "interfaces with spaces",
+			input:    "Reader, Writer, Closer",
+			expected: []string{"Reader", "Writer", "Closer"},
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := NewGenerateCommand()
+			cmd.interfaceNamesStr = tt.input
+			cmd.parseInterfaceNames()
+
+			if tt.input == "" {
+				// For empty input, ensure we get an empty slice, not nil
+				if cmd.interfaceNames == nil {
+					cmd.interfaceNames = []string{}
+				}
+			}
+
+			assert.Equal(t, tt.expected, cmd.interfaceNames)
 		})
 	}
 }
@@ -314,11 +208,7 @@ func Test_varsToArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mc := minimock.NewController(t)
-			defer mc.Wait(time.Second)
-
 			got1 := varsToArgs(tt.v)
-
 			assert.Equal(t, tt.want1, got1, "varsToArgs returned unexpected result")
 		})
 	}

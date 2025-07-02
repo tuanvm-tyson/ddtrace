@@ -1,4 +1,4 @@
-package gowrap
+package ddtrace
 
 import (
 	"flag"
@@ -8,7 +8,7 @@ import (
 
 var version string = "dev"
 
-// Command interface represents gowrap subcommand
+// Command interface represents ddtrace subcommand
 type Command interface {
 	//FlagSet returns command specific flag set. If command doesn't have any flags nil should be returned.
 	FlagSet() *flag.FlagSet
@@ -68,7 +68,7 @@ func GetCommand(name string) Command {
 	return commands[name]
 }
 
-// Usage writes gowrap usage message to w
+// Usage writes ddtrace usage message to w
 func Usage(w io.Writer) error {
 	return usageTemplate.Execute(w, struct {
 		Commands map[string]Command
@@ -76,15 +76,15 @@ func Usage(w io.Writer) error {
 	}{commands, version})
 }
 
-var usageTemplate = template.Must(template.New("usage").Parse(`GoWrap({{.Version}}) is a tool for generating decorators for the Go interfaces
+var usageTemplate = template.Must(template.New("usage").Parse(`ddtrace({{.Version}}) is a tool for generating decorators for the Go interfaces
 
 Usage:
 
-	gowrap command [arguments]
+	ddtrace command [arguments]
 
 The commands are:
 {{ range $name, $cmd := .Commands }}
 	{{ printf "%-10s" $name }}{{ $cmd.ShortDescription }}
 {{ end }}
-Use "gowrap help [command]" for more information about a command.
+Use "ddtrace help [command]" for more information about a command.
 `))

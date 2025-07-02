@@ -1,12 +1,11 @@
-package gowrap
+package ddtrace
 
 import (
+	"bytes"
 	"flag"
 	"io"
 	"testing"
-	"time"
 
-	minimock "github.com/gojuno/minimock/v3"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,32 +29,29 @@ func TestBaseCommand_HelpMessage(t *testing.T) {
 		w io.Writer
 	}
 	tests := []struct {
-		name string
-		init func(t minimock.Tester) BaseCommand
-
-		args func(t minimock.Tester) args
-
-		wantErr bool
+		name        string
+		init        func() BaseCommand
+		args        func() args
+		wantErr     bool
+		wantContent string
 	}{
 		{
 			name: "success",
-			init: func(t minimock.Tester) BaseCommand {
+			init: func() BaseCommand {
 				return BaseCommand{Help: "help"}
 			},
-			args: func(t minimock.Tester) args {
-				return args{w: NewWriterMock(t).WriteMock.Expect([]byte("help")).Return(0, nil)}
+			args: func() args {
+				return args{w: &bytes.Buffer{}}
 			},
-			wantErr: false,
+			wantErr:     false,
+			wantContent: "help",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mc := minimock.NewController(t)
-			defer mc.Wait(time.Second)
-
-			tArgs := tt.args(mc)
-			receiver := tt.init(mc)
+			tArgs := tt.args()
+			receiver := tt.init()
 
 			err := receiver.HelpMessage(tArgs.w)
 
@@ -63,8 +59,10 @@ func TestBaseCommand_HelpMessage(t *testing.T) {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
+				if buf, ok := tArgs.w.(*bytes.Buffer); ok {
+					assert.Equal(t, tt.wantContent, buf.String())
+				}
 			}
-
 		})
 	}
 }
@@ -81,9 +79,7 @@ func TestGetCommand(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
-	mc := minimock.NewController(t)
-	defer mc.Finish()
-
-	w := NewWriterMock(mc).WriteMock.Return(0, nil)
+	w := &bytes.Buffer{}
 	assert.NoError(t, Usage(w))
+	assert.NotEmpty(t, w.String())
 }
