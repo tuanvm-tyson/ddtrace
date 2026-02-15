@@ -3,274 +3,130 @@ package ddtrace
 import (
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewGenerateCommand(t *testing.T) {
-	assert.NotNil(t, NewGenerateCommand())
+	cmd := NewGenerateCommand()
+	assert.NotNil(t, cmd)
+	assert.Equal(t, "", cmd.sourcePkg)
+	assert.Equal(t, "", cmd.outputDir)
+	assert.False(t, cmd.noGenerate)
 }
 
-func TestGenerateCommand_getOptionsForInterface(t *testing.T) {
-	tests := []struct {
-		name          string
-		init          func() *GenerateCommand
-		interfaceName string
+func TestGenerateCommand_Run_ParseArgsError(t *testing.T) {
+	cmd := NewGenerateCommand()
+	cmd.BaseCommand.FlagSet().SetOutput(io.Discard)
 
-		wantErr    bool
-		inspectErr func(err error, t *testing.T) //use for more precise error evaluation
-	}{
-		{
-			name: "basic success case",
-			init: func() *GenerateCommand {
-				cmd := NewGenerateCommand()
-				cmd.outputFile = "test.go"
-				return cmd
-			},
-			interfaceName: "TestInterface",
-			wantErr:       false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			receiver := tt.init()
-
-			got1, err := receiver.getOptionsForInterface(tt.interfaceName)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-				if tt.inspectErr != nil {
-					tt.inspectErr(err, t)
-				}
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, got1, "getOptionsForInterface should return valid options")
-				assert.Equal(t, tt.interfaceName, got1.InterfaceName, "interface name should match")
-			}
-		})
-	}
+	err := cmd.Run([]string{"-zz"}, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "flag provided but not defined")
 }
 
-func TestGenerateCommand_Run(t *testing.T) {
-	tests := []struct {
-		name    string
-		init    func() *GenerateCommand
-		inspect func(r *GenerateCommand, t *testing.T) //inspects *GenerateCommand after execution of Run
+func TestGenerateCommand_Run_DefaultFlags(t *testing.T) {
+	// Running with no flags should default to -p ./ -o ./trace
+	// and scan the current package (github.com/tyson-tuanvm/ddtrace)
+	// which has a Command interface in command.go
+	var writtenFiles []string
+	var writtenContents []string
 
-		args []string
-
-		wantErr    bool
-		inspectErr func(err error, t *testing.T) //use for more precise error evaluation
-	}{
-		{
-			name: "parse args error",
-			init: func() *GenerateCommand {
-				cmd := NewGenerateCommand()
-				cmd.BaseCommand.FlagSet().SetOutput(io.Discard)
-				return cmd
-			},
-			args:    []string{"-pp"},
-			wantErr: true,
-			inspectErr: func(err error, t *testing.T) {
-				assert.Equal(t, "flag provided but not defined: -pp", err.Error())
-			},
-		},
-		{
-			name: "check flags error",
-			init: func() *GenerateCommand {
-				return NewGenerateCommand()
-			},
-			args:    []string{},
-			wantErr: true,
-		},
-		{
-			name: "get options error",
-			init: func() *GenerateCommand {
-				return NewGenerateCommand()
-			},
-			args:    []string{"-p", "unexistingpkg", "-i", "interface", "-o", "unexisting_dir/file.go"},
-			wantErr: true,
-		},
-		{
-			name: "success with single interface",
-			args: []string{"-o", "out.file", "-i", "Command"},
-			init: func() *GenerateCommand {
-				cmd := NewGenerateCommand()
-				cmd.filepath.WriteFile = func(string, []byte, os.FileMode) error { return nil }
-				return cmd
-			},
-			wantErr: false,
-		},
-		{
-			name: "success with local prefixes",
-			args: []string{"-o", "out.file", "-i", "Command", "-l", "foobar.com/pkg"},
-			init: func() *GenerateCommand {
-				cmd := NewGenerateCommand()
-				cmd.filepath.WriteFile = func(filename string, data []byte, perm os.FileMode) error {
-					return nil
-				}
-				return cmd
-			},
-			inspect: func(cmd *GenerateCommand, t *testing.T) {
-				assert.EqualValues(t, "foobar.com/pkg", cmd.localPrefix)
-			},
-			wantErr: false,
-		},
+	cmd := NewGenerateCommand()
+	cmd.filepath.WriteFile = func(name string, data []byte, perm os.FileMode) error {
+		writtenFiles = append(writtenFiles, filepath.Base(name))
+		writtenContents = append(writtenContents, string(data))
+		return nil
+	}
+	cmd.filepath.MkdirAll = func(path string, perm os.FileMode) error {
+		return nil
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			receiver := tt.init()
+	err := cmd.Run([]string{}, nil)
+	require.NoError(t, err)
 
-			err := receiver.Run(tt.args, nil)
+	// Should have generated command_trace.go for the Command interface
+	require.Len(t, writtenFiles, 1)
+	assert.Equal(t, "command_trace.go", writtenFiles[0])
 
-			if tt.inspect != nil {
-				tt.inspect(receiver, t)
-			}
-
-			if tt.wantErr {
-				t.Logf("!!!\n\n%T: %v\n\n!!!", err, err)
-				if assert.Error(t, err) && tt.inspectErr != nil {
-					tt.inspectErr(err, t)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
+	// Check content has the expected structure
+	content := writtenContents[0]
+	assert.Contains(t, content, "// Code generated by ddtrace. DO NOT EDIT.")
+	assert.Contains(t, content, "package trace")
+	assert.Contains(t, content, "CommandWithTracing")
+	assert.Contains(t, content, "NewCommandWithTracing")
 }
 
-func TestGenerateCommand_parseInterfaceNames(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected []string
-	}{
-		{
-			name:     "single interface",
-			input:    "Reader",
-			expected: []string{"Reader"},
-		},
-		{
-			name:     "multiple interfaces",
-			input:    "Reader,Writer,Closer",
-			expected: []string{"Reader", "Writer", "Closer"},
-		},
-		{
-			name:     "interfaces with spaces",
-			input:    "Reader, Writer, Closer",
-			expected: []string{"Reader", "Writer", "Closer"},
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			expected: []string{},
-		},
+func TestGenerateCommand_Run_CustomOutputDir(t *testing.T) {
+	var writtenFiles []string
+
+	cmd := NewGenerateCommand()
+	cmd.filepath.WriteFile = func(name string, data []byte, perm os.FileMode) error {
+		writtenFiles = append(writtenFiles, name)
+		return nil
+	}
+	cmd.filepath.MkdirAll = func(path string, perm os.FileMode) error {
+		return nil
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := NewGenerateCommand()
-			cmd.interfaceNamesStr = tt.input
-			cmd.parseInterfaceNames()
+	err := cmd.Run([]string{"-o", "./custom_out"}, nil)
+	require.NoError(t, err)
 
-			if tt.input == "" {
-				// For empty input, ensure we get an empty slice, not nil
-				if cmd.interfaceNames == nil {
-					cmd.interfaceNames = []string{}
-				}
-			}
-
-			assert.Equal(t, tt.expected, cmd.interfaceNames)
-		})
-	}
+	// Output should be in the custom directory
+	require.Len(t, writtenFiles, 1)
+	assert.Contains(t, writtenFiles[0], "custom_out")
+	assert.True(t, strings.HasSuffix(writtenFiles[0], "command_trace.go"))
 }
 
-func Test_varsToArgs(t *testing.T) {
-	tests := []struct {
-		name  string
-		v     vars
-		want1 string
-	}{
-		{
-			name:  "no vars",
-			v:     nil,
-			want1: "",
-		},
-		{
-			name:  "two vars",
-			v:     vars{varFlag{name: "key", value: "value"}, varFlag{name: "booleanKey", value: true}},
-			want1: " -v key=value -v booleanKey",
-		},
+func TestGenerateCommand_Run_NoGenerateFlag(t *testing.T) {
+	var writtenContents []string
+
+	cmd := NewGenerateCommand()
+	cmd.filepath.WriteFile = func(name string, data []byte, perm os.FileMode) error {
+		writtenContents = append(writtenContents, string(data))
+		return nil
+	}
+	cmd.filepath.MkdirAll = func(path string, perm os.FileMode) error {
+		return nil
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got1 := varsToArgs(tt.v)
-			assert.Equal(t, tt.want1, got1, "varsToArgs returned unexpected result")
-		})
-	}
+	err := cmd.Run([]string{"-g"}, nil)
+	require.NoError(t, err)
+
+	require.Len(t, writtenContents, 1)
+	assert.NotContains(t, writtenContents[0], "go:generate")
 }
 
-func TestVars_toMap(t *testing.T) {
-	tests := []struct {
-		name  string
-		vars  vars
-		want1 map[string]interface{}
-	}{
-		{
-			name: "success",
-			vars: vars{{name: "key", value: "value"}, {name: "boolFlag", value: true}},
-			want1: map[string]interface{}{
-				"key":      "value",
-				"boolFlag": true,
-			},
-		},
+func TestGenerateCommand_Run_WithGoGenerate(t *testing.T) {
+	var writtenContents []string
+
+	cmd := NewGenerateCommand()
+	cmd.filepath.WriteFile = func(name string, data []byte, perm os.FileMode) error {
+		writtenContents = append(writtenContents, string(data))
+		return nil
+	}
+	cmd.filepath.MkdirAll = func(path string, perm os.FileMode) error {
+		return nil
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got1 := tt.vars.toMap()
+	// Without -g flag, go:generate should be included
+	err := cmd.Run([]string{}, nil)
+	require.NoError(t, err)
 
-			assert.Equal(t, tt.want1, got1, "vars.toMap returned unexpected result")
-		})
-	}
+	require.Len(t, writtenContents, 1)
+	assert.Contains(t, writtenContents[0], "go:generate")
+	assert.Contains(t, writtenContents[0], "ddtrace gen -p")
 }
 
-func TestVars_Set(t *testing.T) {
-	tests := []struct {
-		name    string
-		inspect func(r vars, t *testing.T) //inspects vars after execution of Set
-		s       string
-	}{
-		{
-			name: "bool var",
-			s:    "boolVar",
-			inspect: func(v vars, t *testing.T) {
-				assert.Equal(t, vars{varFlag{name: "boolVar", value: true}}, v)
-			},
-		},
+func TestGenerateCommand_Run_InvalidPackage(t *testing.T) {
+	cmd := NewGenerateCommand()
 
-		{
-			name: "string var",
-			s:    "key=value",
-			inspect: func(v vars, t *testing.T) {
-				assert.Equal(t, vars{varFlag{name: "key", value: "value"}}, v)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			v := vars{}
-			err := v.Set(tt.s)
-			assert.NoError(t, err)
-
-			tt.inspect(v, t)
-		})
-	}
+	err := cmd.Run([]string{"-p", "nonexistent/package/path"}, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load source package")
 }
 
 func TestHelper_UpFirst(t *testing.T) {
@@ -279,32 +135,15 @@ func TestHelper_UpFirst(t *testing.T) {
 		in   string
 		out  string
 	}{
-		{
-			name: "fist is lower-cased",
-			in:   "typeName",
-			out:  "TypeName",
-		},
-		{
-			name: "single letter",
-			in:   "v",
-			out:  "V",
-		},
-		{
-			name: "multi-bytes chars",
-			in:   "йоу",
-			out:  "Йоу",
-		},
-		{
-			name: "empty string",
-			in:   "",
-			out:  "",
-		},
+		{name: "first is lower-cased", in: "typeName", out: "TypeName"},
+		{name: "single letter", in: "v", out: "V"},
+		{name: "multi-bytes chars", in: "йоу", out: "Йоу"},
+		{name: "empty string", in: "", out: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotOut := upFirst(tt.in)
-			assert.Equal(t, tt.out, gotOut)
+			assert.Equal(t, tt.out, upFirst(tt.in))
 		})
 	}
 }
@@ -315,32 +154,15 @@ func TestHelper_DownFirst(t *testing.T) {
 		in   string
 		out  string
 	}{
-		{
-			name: "fist is upper-cased",
-			in:   "TypeName",
-			out:  "typeName",
-		},
-		{
-			name: "single letter",
-			in:   "V",
-			out:  "v",
-		},
-		{
-			name: "multi-bytes chars",
-			in:   "Йоу",
-			out:  "йоу",
-		},
-		{
-			name: "empty string",
-			in:   "",
-			out:  "",
-		},
+		{name: "first is upper-cased", in: "TypeName", out: "typeName"},
+		{name: "single letter", in: "V", out: "v"},
+		{name: "multi-bytes chars", in: "Йоу", out: "йоу"},
+		{name: "empty string", in: "", out: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotOut := downFirst(tt.in)
-			assert.Equal(t, tt.out, gotOut)
+			assert.Equal(t, tt.out, downFirst(tt.in))
 		})
 	}
 }
@@ -364,4 +186,41 @@ func Test_toSnakeCase(t *testing.T) {
 	for _, test := range tests {
 		assert.Equal(t, test.want, toSnakeCase(test.input))
 	}
+}
+
+func TestExtractAfterPackage(t *testing.T) {
+	input := `// Code generated by ddtrace. DO NOT EDIT.
+package trace
+
+import (
+	"context"
+)
+
+type FooWithTracing struct {}
+`
+	result := extractAfterPackage(input)
+	assert.NotContains(t, result, "package trace")
+	assert.Contains(t, result, "import")
+	assert.Contains(t, result, "FooWithTracing")
+}
+
+func TestExtractBodyOnly(t *testing.T) {
+	input := `// Code generated by ddtrace. DO NOT EDIT.
+package trace
+
+import (
+	"context"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
+)
+
+// FooWithTracing implements Foo
+type FooWithTracing struct {}
+
+func NewFooWithTracing() {}
+`
+	result := extractBodyOnly(input)
+	assert.NotContains(t, result, "package")
+	assert.NotContains(t, result, "import")
+	assert.Contains(t, result, "FooWithTracing struct")
+	assert.Contains(t, result, "NewFooWithTracing")
 }

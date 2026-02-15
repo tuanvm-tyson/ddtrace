@@ -1,64 +1,131 @@
 # DDTrace
-DDTrace is a command line tool that generates DataDog tracing decorators for Go interface types using simple templates.
-With DDTrace ddtrace you can easily add DataDog tracing instrumentation to your existing code in a few seconds.
+
+DDTrace is a command line tool that auto-generates DataDog tracing decorators for all Go interface types in a package.
+It scans your source code, discovers interfaces, and generates type-safe tracing wrappers with zero configuration.
 
 ## Installation
-### CLI
-```
+
+```bash
 go install github.com/tyson-tuanvm/ddtrace/cmd/ddtrace@latest
 ```
-### As module
-```
-go get -u github.com/tyson-tuanvm/ddtrace/cmd/ddtrace
-```
 
-## Usage of ddtraceß
+## Quick Start
 
-```
-Usage: ddtrace gen -p package -i interfaceName -o output_file.go
-  -g	don't put //go:generate instruction into the generated code
-  -i string
-    	the source interface name(s), i.e. "Reader" or "Reader,Writer,Closer" for multiple interfaces
-  -o string
-    	the output file name
-  -p string
-    	the source package import path, i.e. "io", "github.com/tyson-tuanvm/ddtrace" or
-    	a relative import path like "./generator"
-  -v value
-    	a key-value pair to parametrize the template,
-    	arguments without an equal sign are treated as a bool values,
-    	i.e. -v DecoratorName=MyDecorator -v disableChecks
-```
+1. Add a `//go:generate` directive to any Go file in your package:
 
-This will generate an implementation of the io.Reader interface wrapped with DataDog tracing
+```go
+// service/interfaces.go
+package service
 
-```
-  $ ddtrace gen -p io -i Reader -o reader_with_tracing.go
+import "context"
+
+//go:generate ddtrace gen
+
+type UserService interface {
+    GetUser(ctx context.Context, id string) (*User, error)
+    CreateUser(ctx context.Context, req CreateUserRequest) (*User, error)
+}
+
+type OrderService interface {
+    CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error)
+}
 ```
 
-This will generate implementations for multiple interfaces (Reader, Writer, and Closer) with DataDog tracing in a single file:
+2. Run `go generate`:
 
-```
-  $ ddtrace gen -p io -i Reader,Writer,Closer -o io_with_tracing.go
-```
-
-This will generate a DataDog tracing decorator for the Connector interface that can be found in the ./connector subpackage:
-
-```
-  $ ddtrace gen -p ./connector -i Connector -o ./connector/with_tracing.go
+```bash
+go generate ./service/...
 ```
 
-Run `ddtrace help` for more options
+3. This creates `service/trace/interfaces_trace.go` with tracing wrappers for all interfaces:
 
-## DataDog Template
+```go
+// service/trace/interfaces_trace.go (auto-generated)
+package trace
 
-The built-in DataDog template instruments your interfaces with DataDog tracing spans. It automatically:
+type UserServiceWithTracing struct { ... }
+func NewUserServiceWithTracing(base service.UserService, instance string, ...) { ... }
 
-- Creates spans for each method call
-- Sets service name tags
-- Handles context propagation
-- Reports errors to DataDog
-- Supports custom span decorators
+type OrderServiceWithTracing struct { ... }
+func NewOrderServiceWithTracing(base service.OrderService, instance string, ...) { ... }
+```
 
-The generated code uses the official DataDog Go tracing library (`gopkg.in/DataDog/dd-trace-go.v1/ddtrace`).
+4. Use the traced wrapper in your application:
 
+```go
+import "myapp/service/trace"
+
+userSvc := service.NewUserServiceImpl(repo)
+tracedSvc := trace.NewUserServiceWithTracing(userSvc, "user-service")
+```
+
+## Usage
+
+```
+ddtrace gen [-p package] [-o output_dir] [-g]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-p` | `./` | Source package path |
+| `-o` | `./trace` | Output directory (relative to source package) |
+| `-g` | `false` | Don't put `//go:generate` instruction in generated code |
+
+### Examples
+
+```bash
+# Auto-generate for current package (most common)
+ddtrace gen
+
+# Specify source package
+ddtrace gen -p ./service
+
+# Custom output directory
+ddtrace gen -p ./service -o ./instrumented
+```
+
+## Output Structure
+
+For each source file containing interfaces, DDTrace generates a corresponding `_trace.go` file in the output directory:
+
+```
+service/
+  interfaces.go          → service/trace/interfaces_trace.go
+  repository.go          → service/trace/repository_trace.go
+  helpers.go             → (no output if no interfaces or all ignored)
+```
+
+## Skipping Interfaces
+
+Use `//ddtrace:ignore` to exclude specific interfaces from generation:
+
+```go
+type UserService interface { ... }      // generated
+
+//ddtrace:ignore
+type InternalHelper interface { ... }   // skipped
+
+type OrderService interface { ... }     // generated
+```
+
+## How It Works
+
+- Scans **all interfaces** in the source package
+- Generates tracing wrappers only for methods that accept `context.Context` as the first parameter
+- Methods without `context.Context` are passed through to the base implementation
+- Errors are automatically tagged on the span when the last return value is `error`
+- Supports Go generics, embedded interfaces, and cross-package types
+
+## Custom Span Decorators
+
+Add custom span attributes using the optional span decorator:
+
+```go
+tracedSvc := trace.NewUserServiceWithTracing(userSvc, "user-service",
+    func(span ddtrace.Span, params, results map[string]interface{}) {
+        if userID, ok := params["id"].(string); ok {
+            span.SetTag("user.id", userID)
+        }
+    },
+)
+```

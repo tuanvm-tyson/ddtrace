@@ -2,7 +2,7 @@ package examples
 
 import "context"
 
-//go:generate ddtrace gen -i Speak,Move  -o trace_example.go
+//go:generate ddtrace gen
 
 type Speak interface {
 	SayHello(ctx context.Context, name string) string
