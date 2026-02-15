@@ -1,4 +1,4 @@
-module github.com/tyson-tuanvm/ddtrace
+module github.com/tuanvm-tyson/ddtrace
 
 go 1.23.0
 

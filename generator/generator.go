@@ -17,8 +17,8 @@ import (
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
 
-	"github.com/tyson-tuanvm/ddtrace/pkg"
-	"github.com/tyson-tuanvm/ddtrace/printer"
+	"github.com/tuanvm-tyson/ddtrace/pkg"
+	"github.com/tuanvm-tyson/ddtrace/printer"
 )
 
 // Generator generates decorators for the interface types

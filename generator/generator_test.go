@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
-	"github.com/tyson-tuanvm/ddtrace/pkg"
+	"github.com/tuanvm-tyson/ddtrace/pkg"
 )
 
 func Test_unquote(t *testing.T) {

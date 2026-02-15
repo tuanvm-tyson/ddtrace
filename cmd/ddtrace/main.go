@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/tyson-tuanvm/ddtrace"
+	"github.com/tuanvm-tyson/ddtrace"
 )
 
 func init() {

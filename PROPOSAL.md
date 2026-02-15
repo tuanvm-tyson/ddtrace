@@ -85,7 +85,7 @@ package trace
 import (
     "context"
     service "myapp/service"
-    "github.com/tyson-tuanvm/ddtrace/tracing"
+    "github.com/tuanvm-tyson/ddtrace/tracing"
 )
 
 // Per-interface decorator -- all shared types come from tracing library
@@ -399,7 +399,7 @@ package main
 
 import (
     "myapp/service/trace"
-    "github.com/tyson-tuanvm/ddtrace/tracing"
+    "github.com/tuanvm-tyson/ddtrace/tracing"
 )
 
 func main() {
@@ -478,7 +478,7 @@ These share the same global defaults, so all spans are consistent.
 // handler/user_handler.go
 package handler
 
-import "github.com/tyson-tuanvm/ddtrace/tracing"
+import "github.com/tuanvm-tyson/ddtrace/tracing"
 
 // GIN handler -- StartSpan auto-detects name as "UserHandler.GetUser"
 func (h *UserHandler) GetUser(c *gin.Context) {
@@ -521,7 +521,7 @@ func (s *userServiceImpl) validateAndEnrich(ctx context.Context, user *User) (er
 }
 ```
 
-**Available helpers (from `github.com/tyson-tuanvm/ddtrace/tracing`):**
+**Available helpers (from `github.com/tuanvm-tyson/ddtrace/tracing`):**
 
 | Function | Purpose |
 |----------|---------|
@@ -584,7 +584,7 @@ verify-generate: generate
 ```yaml
 - name: Verify generated code
   run: |
-    go install github.com/tyson-tuanvm/ddtrace/cmd/ddtrace@latest
+    go install github.com/tuanvm-tyson/ddtrace/cmd/ddtrace@latest
     make verify-generate
 ```
 
@@ -618,12 +618,12 @@ verify-generate: generate
 ### Installation
 
 ```bash
-go install github.com/tyson-tuanvm/ddtrace/cmd/ddtrace@latest
+go install github.com/tuanvm-tyson/ddtrace/cmd/ddtrace@latest
 ```
 
 ### References
 
-- [DDTrace Repository](https://github.com/tyson-tuanvm/ddtrace)
+- [DDTrace Repository](https://github.com/tuanvm-tyson/ddtrace)
 - [DataDog Go Tracing](https://docs.datadoghq.com/tracing/setup_overview/setup/go/)
 - [OpenTelemetry Go](https://opentelemetry.io/docs/instrumentation/go/)
 - [Go Generate](https://go.dev/blog/generate)

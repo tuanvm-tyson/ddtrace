@@ -6,7 +6,7 @@ It scans your source code, discovers interfaces, and generates type-safe tracing
 ## Installation
 
 ```bash
-go install github.com/tyson-tuanvm/ddtrace/cmd/ddtrace@latest
+go install github.com/tuanvm-tyson/ddtrace/cmd/ddtrace@latest
 ```
 
 ## Quick Start
@@ -46,7 +46,7 @@ package trace
 import (
     "context"
     service "myapp/service"
-    "github.com/tyson-tuanvm/ddtrace/tracing"
+    "github.com/tuanvm-tyson/ddtrace/tracing"
 )
 
 // Per-interface decorators -- no inline boilerplate
@@ -60,7 +60,7 @@ func NewOrderServiceWithTracing(base service.OrderService, opts ...tracing.Traci
 4. Add the tracing library dependency:
 
 ```bash
-go get github.com/tyson-tuanvm/ddtrace/tracing@latest
+go get github.com/tuanvm-tyson/ddtrace/tracing@latest
 ```
 
 5. Use the traced wrapper in your application:
@@ -136,7 +136,7 @@ Set package-level defaults once at startup -- they apply to ALL tracing decorato
 ```go
 import (
     "myapp/service/trace"
-    "github.com/tyson-tuanvm/ddtrace/tracing"
+    "github.com/tuanvm-tyson/ddtrace/tracing"
 )
 
 func main() {
@@ -165,7 +165,7 @@ The generated constructors use the functional options pattern for per-instance c
 Per-instance options layer on top of global defaults. Option types come from the `tracing` library:
 
 ```go
-import "github.com/tyson-tuanvm/ddtrace/tracing"
+import "github.com/tuanvm-tyson/ddtrace/tracing"
 
 // Simple usage - no options needed (global defaults apply)
 tracedSvc := trace.NewUserServiceWithTracing(userSvc)
@@ -207,7 +207,7 @@ These helpers share the same global defaults (`SetDefaultContextDecorator`, `Set
 as the generated decorators, so all spans are consistent.
 
 ```go
-import "github.com/tyson-tuanvm/ddtrace/tracing"
+import "github.com/tuanvm-tyson/ddtrace/tracing"
 ```
 
 ### StartSpan
