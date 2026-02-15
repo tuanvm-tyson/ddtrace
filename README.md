@@ -11,7 +11,30 @@ go install github.com/tuanvm-tyson/ddtrace/cmd/ddtrace@latest
 
 ## Quick Start
 
-1. Add a `//go:generate` directive to any Go file in your package:
+### Option A: Config File (Recommended)
+
+Create a `.ddtrace.yaml` at your project root (next to `go.mod`):
+
+```yaml
+output: trace
+no-generate: true
+
+packages:
+  github.com/myorg/myapp/service:
+  github.com/myorg/myapp/repository:
+```
+
+Run once:
+
+```bash
+ddtrace gen
+```
+
+This generates tracing wrappers for **all interfaces** across **all listed packages** in a single invocation -- no `//go:generate` tags needed.
+
+### Option B: go:generate (Single Package)
+
+Add a `//go:generate` directive to **one** Go file per package:
 
 ```go
 // service/interfaces.go
@@ -25,19 +48,17 @@ type UserService interface {
     GetUser(ctx context.Context, id string) (*User, error)
     CreateUser(ctx context.Context, req CreateUserRequest) (*User, error)
 }
-
-type OrderService interface {
-    CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error)
-}
 ```
 
-2. Run `go generate`:
+Then run:
 
 ```bash
 go generate ./service/...
 ```
 
-3. This creates `service/trace/interfaces_trace.go` with tracing wrappers for all interfaces:
+### Generated Output
+
+Both options produce the same output -- one `_trace.go` file per source file:
 
 ```go
 // service/trace/interfaces_trace.go (auto-generated)
@@ -49,21 +70,15 @@ import (
     "github.com/tuanvm-tyson/ddtrace/tracing"
 )
 
-// Per-interface decorators -- no inline boilerplate
 type UserServiceWithTracing struct { ... }
 func NewUserServiceWithTracing(base service.UserService, opts ...tracing.TracingOption) { ... }
-
-type OrderServiceWithTracing struct { ... }
-func NewOrderServiceWithTracing(base service.OrderService, opts ...tracing.TracingOption) { ... }
 ```
 
-4. Add the tracing library dependency:
+### Use the traced wrapper
 
 ```bash
 go get github.com/tuanvm-tyson/ddtrace/tracing@latest
 ```
-
-5. Use the traced wrapper in your application:
 
 ```go
 import "myapp/service/trace"
@@ -72,30 +87,73 @@ userSvc := service.NewUserServiceImpl(repo)
 tracedSvc := trace.NewUserServiceWithTracing(userSvc)
 ```
 
+## Config File (`.ddtrace.yaml`)
+
+Place at your module root. Supports global defaults, per-package overrides, and per-interface control:
+
+```yaml
+# Global defaults
+output: trace             # output subdirectory relative to each source package
+no-generate: true         # don't write //go:generate tags in output
+
+packages:
+  # Auto-discover all interfaces
+  github.com/myorg/myapp/service:
+
+  # Override output directory
+  github.com/myorg/myapp/repository:
+    output: repository_trace
+
+  # Per-interface control
+  github.com/myorg/myapp/handler:
+    interfaces:
+      UserHandler:
+        decorator-name: TracedUserHandler   # custom struct name
+        span-prefix: handler.user           # custom span name prefix
+      InternalHelper:
+        ignore: true                        # skip this interface
+
+  # Recursive: all sub-packages
+  github.com/myorg/myapp/internal/...:
+```
+
+**Config precedence**: global defaults < package-level config < interface-level config.
+
 ## Usage
 
 ```
-ddtrace gen [-p package] [-o output_dir] [-g]
+ddtrace gen [-p package] [-o output_dir] [-g] [--config path]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-p` | `./` | Source package path |
+| `-p` | `./` | Source package path (legacy single-package mode) |
 | `-o` | `./trace` | Output directory (relative to source package) |
 | `-g` | `false` | Don't put `//go:generate` instruction in generated code |
+| `--config` | auto-detect | Path to `.ddtrace.yaml` config file |
 
 ### Examples
 
 ```bash
-# Auto-generate for current package (most common)
+# Config-driven: process all packages from .ddtrace.yaml (recommended)
 ddtrace gen
 
-# Specify source package
+# Explicit config path
+ddtrace gen --config ./config/ddtrace.yaml
+
+# Legacy: single package
 ddtrace gen -p ./service
 
-# Custom output directory
+# Legacy: custom output directory
 ddtrace gen -p ./service -o ./instrumented
 ```
+
+### How invocation mode is selected
+
+1. If `-p` is set: **legacy single-package mode** (config file ignored)
+2. If `--config` is set: **load that config file**
+3. Otherwise: **auto-detect** `.ddtrace.yaml` by walking up from the current directory
+4. If no config found: **fall back** to legacy mode with `-p ./`
 
 ## Output Structure
 

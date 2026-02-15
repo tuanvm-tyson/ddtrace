@@ -4,8 +4,6 @@
 
 package trace
 
-//go:generate ddtrace gen -p github.com/tuanvm-tyson/ddtrace/examples -o ./trace
-
 import (
 	"context"
 

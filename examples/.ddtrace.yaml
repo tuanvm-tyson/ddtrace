@@ -1,0 +1,12 @@
+# ddtrace configuration file
+# Run: ddtrace gen (from this directory)
+# Or:  ddtrace gen --config examples/.ddtrace.yaml (from repo root)
+
+# Global defaults
+output: trace        # output subdirectory relative to each source package
+no-generate: true    # don't write //go:generate tags (config replaces them)
+
+# Packages to generate tracing decorators for
+packages:
+  # Auto-discover all interfaces in the examples package
+  github.com/tuanvm-tyson/ddtrace/examples:

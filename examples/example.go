@@ -2,8 +2,6 @@ package examples
 
 import "context"
 
-//go:generate ddtrace gen
-
 type Speak interface {
 	SayHello(ctx context.Context, name string) string
 }

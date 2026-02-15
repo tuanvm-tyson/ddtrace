@@ -1,7 +1,7 @@
 # Proposal: Interface-Based Tracing Pattern for Go Services
 
 **Author:** Platform Engineering Team  
-**Date:** January 2026  
+**Date:** February 2026  
 **Status:** Draft  
 
 ---
@@ -40,10 +40,20 @@ Adding observability to Go services requires instrumenting code with tracing spa
 ### Interface Decorator Pattern with Code Generation
 
 Use the `ddtrace` CLI tool to automatically generate tracing decorators for Go interfaces.
+A single `.ddtrace.yaml` config file drives generation across all packages in the project:
+
+```yaml
+# .ddtrace.yaml (at project root, next to go.mod)
+output: trace
+no-generate: true
+packages:
+  github.com/myorg/myapp/service:
+  github.com/myorg/myapp/repository:
+```
 
 ```bash
-# Generate tracing wrapper for UserService interface
-ddtrace gen -p ./service -i UserService -o ./service/user_service_tracing.go
+# One command generates tracing for ALL listed packages
+ddtrace gen
 ```
 
 ### How It Works
@@ -276,10 +286,20 @@ func (a TracingAspect) After(ctx context.Context, results []interface{}, err err
 
 ### Approach 5: Code Generation (DDTrace - Proposed)
 
-Generate type-safe decorators at build time.
+Generate type-safe decorators at build time using a config file (similar to mockery):
+
+```yaml
+# .ddtrace.yaml
+output: trace
+no-generate: true
+packages:
+  myapp/service:
+  myapp/repository:
+  myapp/internal/...:   # recursive
+```
 
 ```bash
-//go:generate ddtrace gen -p . -i UserService -o user_service_tracing.go
+ddtrace gen    # single invocation for ALL packages
 ```
 
 | Pros | Cons |
@@ -291,6 +311,8 @@ Generate type-safe decorators at build time.
 | ✅ Consistent tracing across all interfaces | ❌ Additional tooling in CI/CD |
 | ✅ Supports Go generics | |
 | ✅ Custom span decorators for flexibility | |
+| ✅ Config-driven, single invocation for entire project | |
+| ✅ Per-interface customization (decorator name, span prefix, ignore) | |
 
 ---
 
@@ -334,8 +356,6 @@ package service
 
 import "context"
 
-//go:generate ddtrace gen -p . -i UserService,OrderService -o tracing_decorators.go
-
 type UserService interface {
     GetUser(ctx context.Context, id string) (*User, error)
     CreateUser(ctx context.Context, req CreateUserRequest) (*User, error)
@@ -350,6 +370,8 @@ type OrderService interface {
     CancelOrder(ctx context.Context, id string) error
 }
 ```
+
+No `//go:generate` tags needed -- the config file drives generation.
 
 #### Step 2: Implement Business Logic (Clean, No Tracing)
 
@@ -387,9 +409,22 @@ func (s *userServiceImpl) GetUser(ctx context.Context, id string) (*User, error)
 
 #### Step 3: Generate Tracing Decorators
 
-```bash
-$ go generate ./service/...
+Create `.ddtrace.yaml` at the project root:
+
+```yaml
+output: trace
+no-generate: true
+packages:
+  myapp/service:
 ```
+
+Then run:
+
+```bash
+$ ddtrace gen
+```
+
+This generates `service/trace/user_service_trace.go` and all other trace files in one shot.
 
 #### Step 4: Wire Dependencies with Tracing
 
@@ -549,18 +584,19 @@ func (s *userServiceImpl) validateAndEnrich(ctx context.Context, user *User) (er
 
 ### Phase 1: New Services (Week 1-2)
 - Adopt `ddtrace` for all new service interfaces
-- Update project templates with `//go:generate` directives
-- Add `ddtrace` to CI/CD pipeline
+- Create `.ddtrace.yaml` at project root listing target packages
+- Add `ddtrace gen` to CI/CD pipeline (`make generate && make verify-generate`)
 
 ### Phase 2: Critical Services (Week 3-4)
 - Identify top 5 services by traffic
 - Extract interfaces from existing implementations
-- Generate tracing decorators
+- Add packages to `.ddtrace.yaml`
+- Run `ddtrace gen` to generate tracing decorators for all at once
 - A/B test tracing overhead
 
 ### Phase 3: Full Rollout (Week 5-8)
-- Apply pattern to remaining services
-- Remove manual tracing code
+- Add remaining packages to `.ddtrace.yaml` (use `./...` patterns for bulk)
+- Remove manual tracing code and old `//go:generate` tags
 - Document best practices
 
 ---
@@ -572,7 +608,7 @@ func (s *userServiceImpl) validateAndEnrich(ctx context.Context, user *User) (er
 ```makefile
 .PHONY: generate
 generate:
-	go generate ./...
+	ddtrace gen
 
 .PHONY: verify-generate
 verify-generate: generate
@@ -587,6 +623,10 @@ verify-generate: generate
     go install github.com/tuanvm-tyson/ddtrace/cmd/ddtrace@latest
     make verify-generate
 ```
+
+> **Note:** With the config-driven approach (`ddtrace gen` + `.ddtrace.yaml`), there is no need for
+> `go generate ./...` or `//go:generate` tags. A single `ddtrace gen` invocation processes all
+> packages defined in the config file, making CI significantly faster for large projects.
 
 ---
 

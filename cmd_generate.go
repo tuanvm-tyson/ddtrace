@@ -28,6 +28,7 @@ type GenerateCommand struct {
 
 	sourcePkg  string
 	outputDir  string
+	configPath string
 	noGenerate bool
 
 	filepath fileSystem
@@ -50,11 +51,12 @@ func NewGenerateCommand() *GenerateCommand {
 	fs := &flag.FlagSet{}
 	fs.StringVar(&gc.sourcePkg, "p", "", `source package path (default: "./")`)
 	fs.StringVar(&gc.outputDir, "o", "", `output directory for generated files (default: "./trace")`)
+	fs.StringVar(&gc.configPath, "config", "", `path to .ddtrace.yaml config file (auto-detected if omitted)`)
 	fs.BoolVar(&gc.noGenerate, "g", false, "don't put //go:generate instruction to the generated code")
 
 	gc.BaseCommand = BaseCommand{
 		Short: "generate tracing decorators for all interfaces in a package",
-		Usage: "[-p package] [-o output_dir] [-g]",
+		Usage: "[-p package] [-o output_dir] [-g] [--config path]",
 		Flags: fs,
 	}
 
@@ -67,10 +69,33 @@ func (gc *GenerateCommand) Run(args []string, stdout io.Writer) error {
 		return CommandLineError(err.Error())
 	}
 
-	// Apply defaults
-	if gc.sourcePkg == "" {
-		gc.sourcePkg = "./"
+	// Decide between config-driven and legacy single-package mode.
+	// If -p is explicitly set, always use legacy mode.
+	if gc.sourcePkg != "" {
+		return gc.runSinglePackage()
 	}
+
+	// Try config-based generation.
+	configPath := gc.configPath
+	if configPath == "" {
+		configPath = FindConfig()
+	}
+	if configPath != "" {
+		cfg, err := LoadConfig(configPath)
+		if err != nil {
+			return err
+		}
+		return gc.runWithConfig(cfg, stdout)
+	}
+
+	// No config found, no -p flag: fall back to single-package mode with defaults.
+	gc.sourcePkg = "./"
+	return gc.runSinglePackage()
+}
+
+// runSinglePackage executes the legacy single-package generation flow.
+func (gc *GenerateCommand) runSinglePackage() error {
+	// Apply defaults
 	if gc.outputDir == "" {
 		gc.outputDir = "./trace"
 	}
@@ -140,7 +165,7 @@ func (gc *GenerateCommand) Run(args []string, stdout io.Writer) error {
 		// Only write //go:generate in the first output file
 		includeGoGenerate := !gc.noGenerate && !wroteGoGenerate
 
-		if err := gc.generateFileDecorators(sourcePackage, astPkg, dstPackage, headerTmpl, bodyTmpl, sharedFS, pkgCache, fg, outFilePath, includeGoGenerate); err != nil {
+		if err := gc.generateFileDecorators(sourcePackage, astPkg, dstPackage, headerTmpl, bodyTmpl, sharedFS, pkgCache, fg, outFilePath, includeGoGenerate, nil); err != nil {
 			return errors.Wrapf(err, "failed to generate for %s", fg.FileName)
 		}
 
@@ -152,7 +177,147 @@ func (gc *GenerateCommand) Run(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runWithConfig processes all packages defined in a .ddtrace.yaml config file.
+func (gc *GenerateCommand) runWithConfig(cfg *Config, stdout io.Writer) error {
+	resolved, err := cfg.ResolvePackages()
+	if err != nil {
+		return errors.Wrap(err, "failed to resolve packages from config")
+	}
+
+	// Shared resources across ALL packages in this run
+	sharedFS := token.NewFileSet()
+	pkgCache := generator.NewPackageCache()
+
+	headerTmpl, err := template.New("header").Funcs(helperFuncs).Parse(minimalHeaderTemplate)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse header template")
+	}
+	bodyTmpl, err := template.New("body").Funcs(helperFuncs).Parse(datadogTemplate)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse body template")
+	}
+
+	for _, rp := range resolved {
+		if err := gc.processPackage(rp, cfg, headerTmpl, bodyTmpl, sharedFS, pkgCache); err != nil {
+			return errors.Wrapf(err, "failed to generate for package %s", rp.ImportPath)
+		}
+	}
+
+	return nil
+}
+
+// processPackage generates tracing decorators for a single package from config.
+func (gc *GenerateCommand) processPackage(
+	rp ResolvedPackage,
+	cfg *Config,
+	headerTmpl *template.Template,
+	bodyTmpl *template.Template,
+	sharedFS *token.FileSet,
+	pkgCache *generator.PackageCache,
+) error {
+	// Load source package
+	sourcePackage, err := pkg.Load(rp.ImportPath)
+	if err != nil {
+		return errors.Wrap(err, "failed to load source package")
+	}
+
+	// Skip packages with no Go files (e.g. test-only / mock packages discovered via "..." pattern)
+	if len(sourcePackage.GoFiles) == 0 && len(sourcePackage.CompiledGoFiles) == 0 {
+		return nil
+	}
+
+	// Parse AST
+	fset := token.NewFileSet()
+	astPkg, err := pkg.AST(fset, sourcePackage)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse source package AST")
+	}
+
+	// Scan for all interfaces
+	fileGroups, err := pkg.ScanPackage(astPkg)
+	if err != nil {
+		return errors.Wrap(err, "failed to scan interfaces")
+	}
+
+	if len(fileGroups) == 0 {
+		return nil
+	}
+
+	// Filter interfaces by config
+	fileGroups = filterInterfaces(fileGroups, rp.Config)
+
+	if len(fileGroups) == 0 {
+		return nil
+	}
+
+	// Resolve output directory
+	srcDir := pkg.Dir(sourcePackage)
+	outDir := rp.Config.Output
+	if !filepath.IsAbs(outDir) {
+		outDir = filepath.Join(srcDir, outDir)
+	}
+
+	if err := gc.filepath.MkdirAll(outDir, os.ModePerm); err != nil {
+		return errors.Wrap(err, "failed to create output directory")
+	}
+
+	// Load destination package
+	outPkgName := filepath.Base(outDir)
+	dstPackage, err := pkg.Load(outDir)
+	if err != nil {
+		dstPackage = &packages.Package{Name: outPkgName}
+	}
+
+	noGenerate := cfg.NoGenerate
+
+	// Generate one output file per source file
+	wroteGoGenerate := false
+	for _, fg := range fileGroups {
+		outFileName := strings.TrimSuffix(fg.FileName, ".go") + "_trace.go"
+		outFilePath := filepath.Join(outDir, outFileName)
+
+		includeGoGenerate := !noGenerate && !wroteGoGenerate
+
+		if err := gc.generateFileDecorators(sourcePackage, astPkg, dstPackage, headerTmpl, bodyTmpl, sharedFS, pkgCache, fg, outFilePath, includeGoGenerate, rp.Config.Interfaces); err != nil {
+			return errors.Wrapf(err, "failed to generate for %s", fg.FileName)
+		}
+
+		if includeGoGenerate {
+			wroteGoGenerate = true
+		}
+	}
+
+	return nil
+}
+
+// filterInterfaces applies interface-level include/ignore rules from config.
+func filterInterfaces(fileGroups []pkg.FileInterfaces, pkgCfg PackageConfig) []pkg.FileInterfaces {
+	if len(pkgCfg.Interfaces) == 0 {
+		return fileGroups // No filtering: include all
+	}
+
+	var result []pkg.FileInterfaces
+	for _, fg := range fileGroups {
+		var filtered []pkg.InterfaceInfo
+		for _, iface := range fg.Interfaces {
+			ifaceCfg, explicit := pkgCfg.Interfaces[iface.Name]
+			if explicit && ifaceCfg != nil && ifaceCfg.Ignore {
+				continue // skip ignored interfaces
+			}
+			filtered = append(filtered, iface)
+		}
+		if len(filtered) > 0 {
+			result = append(result, pkg.FileInterfaces{
+				FileName:   fg.FileName,
+				Interfaces: filtered,
+			})
+		}
+	}
+	return result
+}
+
 // generateFileDecorators generates tracing decorators for all interfaces in a single source file.
+// interfaceConfigs is optional (nil in legacy mode); when set, per-interface overrides are applied.
 func (gc *GenerateCommand) generateFileDecorators(
 	sourcePackage *packages.Package,
 	sourcePackageAST *pkg.Package,
@@ -164,6 +329,7 @@ func (gc *GenerateCommand) generateFileDecorators(
 	fg pkg.FileInterfaces,
 	outFilePath string,
 	includeGoGenerate bool,
+	interfaceConfigs map[string]*InterfaceConfig,
 ) error {
 	var buf bytes.Buffer
 
@@ -185,7 +351,20 @@ func (gc *GenerateCommand) generateFileDecorators(
 	// Subsequent interfaces only contribute their struct/method bodies.
 	generatedAny := false
 	for _, iface := range fg.Interfaces {
-		genOutput, err := gc.generateInterfaceOutput(sourcePackage, sourcePackageAST, dstPackage, headerTmpl, bodyTmpl, sharedFS, pkgCache, iface.Name, outFilePath)
+		// Build per-interface template vars from config
+		vars := make(map[string]interface{})
+		if interfaceConfigs != nil {
+			if ic, ok := interfaceConfigs[iface.Name]; ok && ic != nil {
+				if ic.DecoratorName != "" {
+					vars["DecoratorName"] = ic.DecoratorName
+				}
+				if ic.SpanPrefix != "" {
+					vars["SpanNamePrefix"] = ic.SpanPrefix
+				}
+			}
+		}
+
+		genOutput, err := gc.generateInterfaceOutput(sourcePackage, sourcePackageAST, dstPackage, headerTmpl, bodyTmpl, sharedFS, pkgCache, iface.Name, outFilePath, vars)
 		if err != nil {
 			// Skip interfaces that cannot be generated (e.g., empty interfaces)
 			continue
@@ -233,7 +412,12 @@ func (gc *GenerateCommand) generateInterfaceOutput(
 	pkgCache *generator.PackageCache,
 	interfaceName string,
 	outFilePath string,
+	vars map[string]interface{},
 ) (string, error) {
+	if vars == nil {
+		vars = make(map[string]interface{})
+	}
+
 	options := generator.Options{
 		InterfaceName:              interfaceName,
 		OutputFile:                 outFilePath,
@@ -247,7 +431,7 @@ func (gc *GenerateCommand) generateInterfaceOutput(
 		FileSet:                    sharedFS,
 		PackageCache:               pkgCache,
 		Funcs:                      helperFuncs,
-		Vars:                       make(map[string]interface{}),
+		Vars:                       vars,
 		HeaderVars:                 make(map[string]interface{}),
 	}
 
