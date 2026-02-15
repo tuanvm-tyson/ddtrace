@@ -10,144 +10,56 @@ import (
 	"context"
 
 	_sourceExamples "github.com/tuanvm-tyson/ddtrace/examples"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
-	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+	"github.com/tyson-tuanvm/ddtrace/tracing"
 )
-
-// --- Package-level global defaults ---
-// These are applied to ALL tracing decorators in this package automatically.
-// Call the SetDefault* functions once at application startup, before creating any decorator instances.
-var (
-	_globalContextDecorator func(ctx context.Context, span ddtrace.Span)
-	_globalSpanOpts         []tracer.StartSpanOption
-)
-
-// SetDefaultContextDecorator sets a context decorator that is automatically applied to ALL spans
-// created by any tracing decorator in this package. Use this to extract request-scoped values
-// (e.g., userId, tenantId) from context and set them as span tags.
-func SetDefaultContextDecorator(f func(ctx context.Context, span ddtrace.Span)) {
-	_globalContextDecorator = f
-}
-
-// SetDefaultSpanOptions sets span options that are automatically prepended to ALL spans
-// created by any tracing decorator in this package.
-func SetDefaultSpanOptions(opts ...tracer.StartSpanOption) {
-	_globalSpanOpts = opts
-}
-
-// --- Per-instance configuration ---
-
-// TracingOption configures the tracing decorator.
-type TracingOption func(*tracingConfig)
-
-type tracingConfig struct {
-	spanDecorator    func(span ddtrace.Span, params, results map[string]interface{})
-	contextDecorator func(ctx context.Context, span ddtrace.Span)
-	spanOpts         []tracer.StartSpanOption
-}
-
-// WithSpanDecorator sets a custom span decorator that is called on every span
-// with the method parameters and results, allowing you to add custom tags.
-func WithSpanDecorator(f func(span ddtrace.Span, params, results map[string]interface{})) TracingOption {
-	return func(c *tracingConfig) {
-		c.spanDecorator = f
-	}
-}
-
-// WithContextDecorator sets a per-instance context decorator that runs after the global
-// context decorator (if set). Use this for instance-specific span tags.
-func WithContextDecorator(f func(ctx context.Context, span ddtrace.Span)) TracingOption {
-	return func(c *tracingConfig) {
-		c.contextDecorator = f
-	}
-}
-
-// WithSpanOptions sets additional tracer.StartSpanOption to be applied
-// to every span created by the tracing decorator.
-func WithSpanOptions(opts ...tracer.StartSpanOption) TracingOption {
-	return func(c *tracingConfig) {
-		c.spanOpts = append(c.spanOpts, opts...)
-	}
-}
 
 // SpeakWithTracing implements Speak interface instrumented with Datadog tracing
 type SpeakWithTracing struct {
 	_sourceExamples.Speak
-	_cfg tracingConfig
+	_cfg tracing.TracingConfig
 }
 
 // NewSpeakWithTracing returns SpeakWithTracing
-func NewSpeakWithTracing(base _sourceExamples.Speak, opts ...TracingOption) SpeakWithTracing {
-	cfg := tracingConfig{}
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	// Prepend global span options; per-instance options take precedence
-	cfg.spanOpts = append(_globalSpanOpts, cfg.spanOpts...)
+func NewSpeakWithTracing(base _sourceExamples.Speak, opts ...tracing.TracingOption) SpeakWithTracing {
 	return SpeakWithTracing{
 		Speak: base,
-		_cfg:  cfg,
+		_cfg:  tracing.NewTracingConfig(opts...),
 	}
 }
 
 // SayHello implements Speak
 func (_d SpeakWithTracing) SayHello(ctx context.Context, name string) (s1 string) {
-	span, ctx := tracer.StartSpanFromContext(ctx, "Speak.SayHello", _d._cfg.spanOpts...)
-	if _globalContextDecorator != nil {
-		_globalContextDecorator(ctx, span)
-	}
-	if _d._cfg.contextDecorator != nil {
-		_d._cfg.contextDecorator(ctx, span)
-	}
+	span, ctx := _d._cfg.StartSpan(ctx, "Speak.SayHello")
 	defer func() {
-		if _d._cfg.spanDecorator != nil {
-			_d._cfg.spanDecorator(span, map[string]interface{}{
-				"ctx":  ctx,
-				"name": name}, map[string]interface{}{
-				"s1": s1})
-		}
-		span.Finish()
+		_d._cfg.FinishSpan(span, nil, map[string]interface{}{
+			"ctx":  ctx,
+			"name": name}, map[string]interface{}{
+			"s1": s1})
 	}()
 	return _d.Speak.SayHello(ctx, name)
 }
 
-// MoveWithTracing implements Move interface instrumented with Datadog tracing
 type MoveWithTracing struct {
 	_sourceExamples.Move
-	_cfg tracingConfig
+	_cfg tracing.TracingConfig
 }
 
 // NewMoveWithTracing returns MoveWithTracing
-func NewMoveWithTracing(base _sourceExamples.Move, opts ...TracingOption) MoveWithTracing {
-	cfg := tracingConfig{}
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-	// Prepend global span options; per-instance options take precedence
-	cfg.spanOpts = append(_globalSpanOpts, cfg.spanOpts...)
+func NewMoveWithTracing(base _sourceExamples.Move, opts ...tracing.TracingOption) MoveWithTracing {
 	return MoveWithTracing{
 		Move: base,
-		_cfg: cfg,
+		_cfg: tracing.NewTracingConfig(opts...),
 	}
 }
 
 // Walk implements Move
 func (_d MoveWithTracing) Walk(ctx context.Context, distance int) (s1 string) {
-	span, ctx := tracer.StartSpanFromContext(ctx, "Move.Walk", _d._cfg.spanOpts...)
-	if _globalContextDecorator != nil {
-		_globalContextDecorator(ctx, span)
-	}
-	if _d._cfg.contextDecorator != nil {
-		_d._cfg.contextDecorator(ctx, span)
-	}
+	span, ctx := _d._cfg.StartSpan(ctx, "Move.Walk")
 	defer func() {
-		if _d._cfg.spanDecorator != nil {
-			_d._cfg.spanDecorator(span, map[string]interface{}{
-				"ctx":      ctx,
-				"distance": distance}, map[string]interface{}{
-				"s1": s1})
-		}
-		span.Finish()
+		_d._cfg.FinishSpan(span, nil, map[string]interface{}{
+			"ctx":      ctx,
+			"distance": distance}, map[string]interface{}{
+			"s1": s1})
 	}()
 	return _d.Move.Walk(ctx, distance)
 }

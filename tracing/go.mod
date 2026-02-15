@@ -1,13 +1,8 @@
-module github.com/tuanvm-tyson/ddtrace/examples
+module github.com/tyson-tuanvm/ddtrace/tracing
 
-go 1.24.4
+go 1.23.0
 
-require (
-	github.com/tyson-tuanvm/ddtrace/tracing v0.0.0-00010101000000-000000000000
-	gopkg.in/DataDog/dd-trace-go.v1 v1.74.2 // indirect
-)
-
-replace github.com/tyson-tuanvm/ddtrace/tracing => ../tracing
+require gopkg.in/DataDog/dd-trace-go.v1 v1.74.2
 
 require (
 	github.com/DataDog/appsec-internal-go v1.11.2 // indirect

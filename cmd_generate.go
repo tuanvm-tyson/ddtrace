@@ -154,7 +154,6 @@ func (gc *GenerateCommand) generateFileDecorators(
 
 	// Generate each interface through the existing generator engine.
 	// The first interface's output includes imports (with the aliased source package import).
-	// After the first interface's imports, we inject shared tracing option types.
 	// Subsequent interfaces only contribute their struct/method bodies.
 	generatedAny := false
 	for _, iface := range fg.Interfaces {
@@ -166,15 +165,7 @@ func (gc *GenerateCommand) generateFileDecorators(
 
 		if !generatedAny {
 			// First interface: include imports + body (strip only the package line)
-			firstOutput := extractAfterPackage(genOutput)
-			// Inject shared tracing option types between imports and the first interface's body.
-			// Split at the first type/func declaration boundary.
-			importsSection, bodySection := splitImportsAndBody(firstOutput)
-			buf.WriteString(importsSection)
-			buf.WriteString("\n")
-			buf.WriteString(sharedTracingTypes)
-			buf.WriteString("\n")
-			buf.WriteString(bodySection)
+			buf.WriteString(extractAfterPackage(genOutput))
 		} else {
 			// Subsequent interfaces: body only (strip package + imports)
 			buf.WriteString(extractBodyOnly(genOutput))
@@ -292,44 +283,6 @@ func extractBodyOnly(content string) string {
 	return strings.Join(bodyLines, "\n")
 }
 
-// splitImportsAndBody splits generated Go source (without package line) into
-// the imports section and the body (struct/func declarations).
-// The imports section includes everything up to and including the closing ")" of
-// the import block. The body is everything after.
-func splitImportsAndBody(content string) (importsSection, bodySection string) {
-	lines := strings.Split(content, "\n")
-	inImportBlock := false
-	splitIdx := 0
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "import (") || trimmed == "import(" {
-			inImportBlock = true
-			continue
-		}
-		if inImportBlock {
-			if trimmed == ")" {
-				inImportBlock = false
-				splitIdx = i + 1
-			}
-			continue
-		}
-		// Single-line import
-		if strings.HasPrefix(trimmed, "import ") && !strings.Contains(trimmed, "(") {
-			splitIdx = i + 1
-			continue
-		}
-	}
-
-	if splitIdx > 0 && splitIdx < len(lines) {
-		return strings.Join(lines[:splitIdx], "\n"), strings.Join(lines[splitIdx:], "\n")
-	}
-
-	// No import block found, return everything as body
-	return "", content
-}
-
 // minimalHeaderTemplate is used when generating individual interface bodies.
 // It includes the package clause and source package imports so cross-package
 // type references (e.g., _sourcePkg.InterfaceName) resolve correctly.
@@ -376,75 +329,10 @@ func toSnakeCase(str string) string {
 	return strings.ToLower(result)
 }
 
-// sharedTracingTypes is emitted once per output file, before any per-interface code.
-// It defines package-level global defaults, the shared TracingOption functional-option type,
-// the tracingConfig struct, and WithXxx option constructors.
-// NOTE: No import block here -- imports are provided by the per-interface datadogTemplate
-// and goimports merges them all at the top of the file.
-const sharedTracingTypes = `
-// --- Package-level global defaults ---
-// These are applied to ALL tracing decorators in this package automatically.
-// Call the SetDefault* functions once at application startup, before creating any decorator instances.
-var (
-  _globalContextDecorator func(ctx context.Context, span ddtrace.Span)
-  _globalSpanOpts         []tracer.StartSpanOption
-)
-
-// SetDefaultContextDecorator sets a context decorator that is automatically applied to ALL spans
-// created by any tracing decorator in this package. Use this to extract request-scoped values
-// (e.g., userId, tenantId) from context and set them as span tags.
-func SetDefaultContextDecorator(f func(ctx context.Context, span ddtrace.Span)) {
-  _globalContextDecorator = f
-}
-
-// SetDefaultSpanOptions sets span options that are automatically prepended to ALL spans
-// created by any tracing decorator in this package.
-func SetDefaultSpanOptions(opts ...tracer.StartSpanOption) {
-  _globalSpanOpts = opts
-}
-
-// --- Per-instance configuration ---
-
-// TracingOption configures the tracing decorator.
-type TracingOption func(*tracingConfig)
-
-type tracingConfig struct {
-  spanDecorator    func(span ddtrace.Span, params, results map[string]interface{})
-  contextDecorator func(ctx context.Context, span ddtrace.Span)
-  spanOpts         []tracer.StartSpanOption
-}
-
-// WithSpanDecorator sets a custom span decorator that is called on every span
-// with the method parameters and results, allowing you to add custom tags.
-func WithSpanDecorator(f func(span ddtrace.Span, params, results map[string]interface{})) TracingOption {
-  return func(c *tracingConfig) {
-    c.spanDecorator = f
-  }
-}
-
-// WithContextDecorator sets a per-instance context decorator that runs after the global
-// context decorator (if set). Use this for instance-specific span tags.
-func WithContextDecorator(f func(ctx context.Context, span ddtrace.Span)) TracingOption {
-  return func(c *tracingConfig) {
-    c.contextDecorator = f
-  }
-}
-
-// WithSpanOptions sets additional tracer.StartSpanOption to be applied
-// to every span created by the tracing decorator.
-func WithSpanOptions(opts ...tracer.StartSpanOption) TracingOption {
-  return func(c *tracingConfig) {
-    c.spanOpts = append(c.spanOpts, opts...)
-  }
-}
-`
-
 const datadogTemplate = `import (
     "context"
 
-    "gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
-    "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/ext"
-    "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+    "github.com/tyson-tuanvm/ddtrace/tracing"
 )
 
 {{ $decorator := (or .Vars.DecoratorName (printf "%sWithTracing" .Interface.Name)) }}
@@ -453,20 +341,14 @@ const datadogTemplate = `import (
 // {{$decorator}} implements {{.Interface.Name}} interface instrumented with Datadog tracing
 type {{$decorator}} struct {
   {{.Interface.Type}}
-  _cfg tracingConfig
+  _cfg tracing.TracingConfig
 }
 
 // New{{$decorator}} returns {{$decorator}}
-func New{{$decorator}} (base {{.Interface.Type}}, opts ...TracingOption) {{$decorator}} {
-  cfg := tracingConfig{}
-  for _, opt := range opts {
-    opt(&cfg)
-  }
-  // Prepend global span options; per-instance options take precedence
-  cfg.spanOpts = append(_globalSpanOpts, cfg.spanOpts...)
+func New{{$decorator}} (base {{.Interface.Type}}, opts ...tracing.TracingOption) {{$decorator}} {
   return {{$decorator}} {
     {{.Interface.Name}}: base,
-    _cfg: cfg,
+    _cfg: tracing.NewTracingConfig(opts...),
   }
 }
 
@@ -474,23 +356,9 @@ func New{{$decorator}} (base {{.Interface.Type}}, opts ...TracingOption) {{$deco
   {{if $method.AcceptsContext}}
     // {{$method.Name}} implements {{$.Interface.Name}}
 func (_d {{$decorator}}) {{$method.Declaration}} {
-  span, ctx := tracer.StartSpanFromContext(ctx, "{{$spanNameType}}.{{$method.Name}}", _d._cfg.spanOpts...)
-  if _globalContextDecorator != nil {
-    _globalContextDecorator(ctx, span)
-  }
-  if _d._cfg.contextDecorator != nil {
-    _d._cfg.contextDecorator(ctx, span)
-  }
+  span, ctx := _d._cfg.StartSpan(ctx, "{{$spanNameType}}.{{$method.Name}}")
   defer func() {
-    if _d._cfg.spanDecorator != nil {
-      _d._cfg.spanDecorator(span, {{$method.ParamsMap}}, {{$method.ResultsMap}})
-    }{{- if $method.ReturnsError}} else if err != nil {
-      span.SetTag(ext.Error, err)
-      span.SetTag(ext.ErrorMsg, err.Error())
-      span.SetTag(ext.ErrorType, "error")
-    }
-    {{end}}
-    span.Finish()
+    _d._cfg.FinishSpan(span, {{if $method.ReturnsError}}err{{else}}nil{{end}}, {{$method.ParamsMap}}, {{$method.ResultsMap}})
   }()
   {{$method.Pass (printf "_d.%s." $.Interface.Name) }}
 }

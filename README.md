@@ -43,20 +43,27 @@ go generate ./service/...
 // service/trace/interfaces_trace.go (auto-generated)
 package trace
 
-// Shared functional option types
-type TracingOption func(*tracingConfig)
-func WithSpanDecorator(f func(...)) TracingOption { ... }
-func WithSpanOptions(opts ...tracer.StartSpanOption) TracingOption { ... }
+import (
+    "context"
+    service "myapp/service"
+    "github.com/tyson-tuanvm/ddtrace/tracing"
+)
 
-// Per-interface decorators
+// Per-interface decorators -- no inline boilerplate
 type UserServiceWithTracing struct { ... }
-func NewUserServiceWithTracing(base service.UserService, opts ...TracingOption) { ... }
+func NewUserServiceWithTracing(base service.UserService, opts ...tracing.TracingOption) { ... }
 
 type OrderServiceWithTracing struct { ... }
-func NewOrderServiceWithTracing(base service.OrderService, opts ...TracingOption) { ... }
+func NewOrderServiceWithTracing(base service.OrderService, opts ...tracing.TracingOption) { ... }
 ```
 
-4. Use the traced wrapper in your application:
+4. Add the tracing library dependency:
+
+```bash
+go get github.com/tyson-tuanvm/ddtrace/tracing@latest
+```
+
+5. Use the traced wrapper in your application:
 
 ```go
 import "myapp/service/trace"
@@ -124,14 +131,17 @@ type OrderService interface { ... }     // generated
 
 ## Global Defaults
 
-Set package-level defaults once at startup -- they apply to ALL tracing decorators automatically:
+Set package-level defaults once at startup -- they apply to ALL tracing decorators and manual `StartSpan` calls automatically:
 
 ```go
-import "myapp/service/trace"
+import (
+    "myapp/service/trace"
+    "github.com/tyson-tuanvm/ddtrace/tracing"
+)
 
 func main() {
     // Set global context decorator -- extracts request-scoped values for ALL spans
-    trace.SetDefaultContextDecorator(func(ctx context.Context, span ddtrace.Span) {
+    tracing.SetDefaultContextDecorator(func(ctx context.Context, span ddtrace.Span) {
         if userID := auth.GetUserID(ctx); userID != "" {
             span.SetTag("user.id", userID)
         }
@@ -141,7 +151,7 @@ func main() {
     })
 
     // Set global span options -- applied to ALL spans
-    trace.SetDefaultSpanOptions(tracer.ServiceName("my-service"))
+    tracing.SetDefaultSpanOptions(tracer.ServiceName("my-service"))
 
     // Create decorators with NO options -- globals are applied automatically
     tracedUserSvc := trace.NewUserServiceWithTracing(userSvc)
@@ -152,22 +162,24 @@ func main() {
 ## Functional Options
 
 The generated constructors use the functional options pattern for per-instance customization.
-Per-instance options layer on top of global defaults:
+Per-instance options layer on top of global defaults. Option types come from the `tracing` library:
 
 ```go
+import "github.com/tyson-tuanvm/ddtrace/tracing"
+
 // Simple usage - no options needed (global defaults apply)
 tracedSvc := trace.NewUserServiceWithTracing(userSvc)
 
 // With per-instance context decorator (runs after global context decorator)
 tracedSvc := trace.NewUserServiceWithTracing(userSvc,
-    trace.WithContextDecorator(func(ctx context.Context, span ddtrace.Span) {
+    tracing.WithContextDecorator(func(ctx context.Context, span ddtrace.Span) {
         span.SetTag("payment.gateway", "stripe")
     }),
 )
 
 // With custom span decorator (for result-based tags)
 tracedSvc := trace.NewUserServiceWithTracing(userSvc,
-    trace.WithSpanDecorator(func(span ddtrace.Span, params, results map[string]interface{}) {
+    tracing.WithSpanDecorator(func(span ddtrace.Span, params, results map[string]interface{}) {
         if userID, ok := params["id"].(string); ok {
             span.SetTag("user.id", userID)
         }
@@ -176,13 +188,111 @@ tracedSvc := trace.NewUserServiceWithTracing(userSvc,
 
 // With additional span options
 tracedSvc := trace.NewUserServiceWithTracing(userSvc,
-    trace.WithSpanOptions(tracer.ServiceName("user-service")),
+    tracing.WithSpanOptions(tracer.ServiceName("user-service")),
 )
 
 // Combine multiple options
 tracedSvc := trace.NewUserServiceWithTracing(userSvc,
-    trace.WithSpanOptions(tracer.ServiceName("user-service")),
-    trace.WithSpanDecorator(myCustomDecorator),
-    trace.WithContextDecorator(myContextDecorator),
+    tracing.WithSpanOptions(tracer.ServiceName("user-service")),
+    tracing.WithSpanDecorator(myCustomDecorator),
+    tracing.WithContextDecorator(myContextDecorator),
 )
+```
+
+## Manual Tracing Helpers
+
+The `tracing` library provides helper functions for **manual tracing** of code not covered by
+interface decorators -- private functions, handler-level code, closures, etc.
+These helpers share the same global defaults (`SetDefaultContextDecorator`, `SetDefaultSpanOptions`)
+as the generated decorators, so all spans are consistent.
+
+```go
+import "github.com/tyson-tuanvm/ddtrace/tracing"
+```
+
+### StartSpan
+
+Creates a new span. The operation name is **auto-detected from the call stack** by default.
+
+```go
+// Auto-detect operation name from caller (most common)
+span, ctx := tracing.StartSpan(ctx)
+
+// Override operation name
+span, ctx := tracing.StartSpan(ctx, tracing.WithOperationName("CustomOperation"))
+
+// With additional tracer options
+span, ctx := tracing.StartSpan(ctx, tracing.WithTracerOptions(tracer.ServiceName("payment-svc")))
+```
+
+### FinishSpan
+
+Finishes a span and automatically sets error tags if `err != nil`. Use in `defer`:
+
+```go
+func (s *serviceImpl) doPrivateWork(ctx context.Context) (err error) {
+    span, ctx := tracing.StartSpan(ctx)
+    defer func() { tracing.FinishSpan(span, err) }()
+
+    // business logic...
+    return s.repo.Save(ctx, data)
+}
+```
+
+### SetError
+
+Sets error tags on a span without finishing it. Useful in handlers where you `defer span.Finish()`
+separately and set errors at different branch points:
+
+```go
+func (h *Handler) GetUser(c *gin.Context) {
+    span, ctx := tracing.StartSpan(c.Request.Context())
+    defer span.Finish()
+    c.Request = c.Request.WithContext(ctx)
+
+    user, err := h.userService.GetUser(ctx, c.Param("id"))
+    if err != nil {
+        tracing.SetError(span, err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(200, user)
+}
+```
+
+### GIN / ECHO Handler Examples
+
+**GIN:**
+
+```go
+func (h *UserHandler) GetUser(c *gin.Context) {
+    span, ctx := tracing.StartSpan(c.Request.Context())  // auto: "UserHandler.GetUser"
+    defer span.Finish()
+    c.Request = c.Request.WithContext(ctx)
+
+    user, err := h.userService.GetUser(ctx, c.Param("id"))
+    if err != nil {
+        tracing.SetError(span, err)
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(200, user)
+}
+```
+
+**ECHO:**
+
+```go
+func (h *UserHandler) GetUser(c echo.Context) error {
+    span, ctx := tracing.StartSpan(c.Request().Context())  // auto: "UserHandler.GetUser"
+    defer span.Finish()
+    c.SetRequest(c.Request().WithContext(ctx))
+
+    user, err := h.userService.GetUser(ctx, c.Param("id"))
+    if err != nil {
+        tracing.SetError(span, err)
+        return c.JSON(500, map[string]string{"error": err.Error()})
+    }
+    return c.JSON(200, user)
+}
 ```
