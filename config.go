@@ -21,6 +21,13 @@ type Config struct {
 	// NoGenerate disables //go:generate tags in generated files.
 	NoGenerate bool `yaml:"no-generate"`
 
+	// Exclude lists path segments to skip when expanding "..." patterns.
+	// A package is excluded if any segment in its import path matches an entry.
+	// For example, "mock" excludes "app/service/mock" and "app/service/mock/sub"
+	// but NOT "app/mockservice".
+	// The output directory (e.g. "trace") is always excluded automatically.
+	Exclude []string `yaml:"exclude"`
+
 	// Packages maps package import paths (or patterns ending in /...) to per-package config.
 	Packages map[string]*PackageConfig `yaml:"packages"`
 }
@@ -124,7 +131,17 @@ func (c *Config) ResolvePackages() ([]ResolvedPackage, error) {
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to resolve pattern %q", pattern)
 			}
+			// Filter out sub-packages that should not contain source interfaces:
+			// - output directories (e.g. /trace) are always excluded automatically
+			// - user-defined exclude patterns from config (e.g. mock, dto)
+			outputSuffix := "/" + merged.Output
 			for _, p := range paths {
+				if strings.HasSuffix(p, outputSuffix) || strings.Contains(p, outputSuffix+"/") {
+					continue
+				}
+				if c.shouldExclude(p) {
+					continue
+				}
 				result = append(result, ResolvedPackage{
 					ImportPath: p,
 					Config:     merged,
@@ -139,6 +156,19 @@ func (c *Config) ResolvePackages() ([]ResolvedPackage, error) {
 	}
 
 	return result, nil
+}
+
+// shouldExclude returns true if importPath contains a path segment matching
+// any entry in Config.Exclude. Matching is exact per segment: "mock" matches
+// "app/mock" and "app/mock/sub" but not "app/mockservice".
+func (c *Config) shouldExclude(importPath string) bool {
+	for _, seg := range c.Exclude {
+		suffix := "/" + seg
+		if strings.HasSuffix(importPath, suffix) || strings.Contains(importPath, suffix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // mergePackageConfig applies global defaults to a package config.

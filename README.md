@@ -95,6 +95,9 @@ Place at your module root. Supports global defaults, per-package overrides, and 
 # Global defaults
 output: trace             # output subdirectory relative to each source package
 no-generate: true         # don't write //go:generate tags in output
+exclude:                  # path segments to skip in "..." expansion
+  - mock                  # skip mock directories (generated mocks)
+  - dto                   # skip dto directories (data transfer objects)
 
 packages:
   # Auto-discover all interfaces
@@ -116,6 +119,8 @@ packages:
   # Recursive: all sub-packages
   github.com/myorg/myapp/internal/...:
 ```
+
+The `exclude` list applies only to `...` pattern expansion. A package is excluded if any path segment matches an entry exactly -- `mock` skips `service/mock` and `service/mock/sub` but not `service/mockutil`. The output directory (e.g. `trace`) is always excluded automatically and does not need to be listed.
 
 **Config precedence**: global defaults < package-level config < interface-level config.
 

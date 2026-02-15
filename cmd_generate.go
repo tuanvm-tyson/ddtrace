@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 	"unicode"
 
 	"github.com/Masterminds/sprig/v3"
@@ -28,10 +29,11 @@ import (
 type GenerateCommand struct {
 	BaseCommand
 
-	sourcePkg  string
-	outputDir  string
-	configPath string
-	noGenerate bool
+	sourcePkg       string
+	outputDir       string
+	configPath      string
+	noGenerate      bool
+	forceRegenerate bool
 
 	filepath fileSystem
 }
@@ -55,10 +57,11 @@ func NewGenerateCommand() *GenerateCommand {
 	fs.StringVar(&gc.outputDir, "o", "", `output directory for generated files (default: "./trace")`)
 	fs.StringVar(&gc.configPath, "config", "", `path to .ddtrace.yaml config file (auto-detected if omitted)`)
 	fs.BoolVar(&gc.noGenerate, "g", false, "don't put //go:generate instruction to the generated code")
+	fs.BoolVar(&gc.forceRegenerate, "force", false, "regenerate all packages regardless of file modification times")
 
 	gc.BaseCommand = BaseCommand{
 		Short: "generate tracing decorators for all interfaces in a package",
-		Usage: "[-p package] [-o output_dir] [-g] [--config path]",
+		Usage: "[-p package] [-o output_dir] [-g] [--config path] [--force]",
 		Flags: fs,
 	}
 
@@ -87,7 +90,7 @@ func (gc *GenerateCommand) Run(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return gc.runWithConfig(cfg, stdout)
+		return gc.runWithConfig(cfg, configPath, stdout)
 	}
 
 	// No config found, no -p flag: fall back to single-package mode with defaults.
@@ -180,21 +183,81 @@ func (gc *GenerateCommand) runSinglePackage() error {
 }
 
 // runWithConfig processes all packages defined in a .ddtrace.yaml config file.
-func (gc *GenerateCommand) runWithConfig(cfg *Config, stdout io.Writer) error {
+func (gc *GenerateCommand) runWithConfig(cfg *Config, configPath string, stdout io.Writer) error {
 	resolved, err := cfg.ResolvePackages()
 	if err != nil {
 		return errors.Wrap(err, "failed to resolve packages from config")
 	}
 
-	// Collect all import paths for batch loading.
-	importPaths := make([]string, len(resolved))
-	for i, rp := range resolved {
+	// --- Incremental generation: skip unchanged packages before loading ---
+	toProcess := resolved
+	if !gc.forceRegenerate {
+		moduleRoot, modulePath, modErr := findModuleRoot(filepath.Dir(configPath))
+		if modErr == nil {
+			configTime := fileModTime(configPath)
+
+			// Determine the last successful run time by finding the newest
+			// _trace.go file across all packages. This lets us skip packages
+			// that were checked before and had no interfaces.
+			var lastRunTime time.Time
+			for _, rp := range resolved {
+				srcDir := importPathToDir(moduleRoot, modulePath, rp.ImportPath)
+				if srcDir == "" {
+					continue
+				}
+				outDir := filepath.Join(srcDir, rp.Config.Output)
+				if t := newestTraceModTime(outDir); t.After(lastRunTime) {
+					lastRunTime = t
+				}
+			}
+
+			var filtered []ResolvedPackage
+			for _, rp := range resolved {
+				srcDir := importPathToDir(moduleRoot, modulePath, rp.ImportPath)
+				if srcDir == "" {
+					// External package or can't determine dir; always process.
+					filtered = append(filtered, rp)
+					continue
+				}
+				outDir := filepath.Join(srcDir, rp.Config.Output)
+				newestOutput := newestTraceModTime(outDir)
+
+				if !newestOutput.IsZero() {
+					// Has output: regenerate only if source or config changed.
+					if sourceNewerThan(srcDir, newestOutput) ||
+						configTime.After(newestOutput) {
+						filtered = append(filtered, rp)
+					}
+					continue
+				}
+
+				// No output directory: either first run or package had no
+				// interfaces last time. Include if this is the first run,
+				// if source was added/modified since the last run, or if
+				// the config changed since the last run.
+				if lastRunTime.IsZero() ||
+					sourceNewerThan(srcDir, lastRunTime) ||
+					configTime.After(lastRunTime) {
+					filtered = append(filtered, rp)
+				}
+			}
+			toProcess = filtered
+		}
+		// If findModuleRoot fails, fall through and process everything.
+	}
+
+	if len(toProcess) == 0 {
+		return nil // nothing changed
+	}
+
+	// Collect import paths for batch loading.
+	importPaths := make([]string, len(toProcess))
+	for i, rp := range toProcess {
 		importPaths[i] = rp.ImportPath
 	}
 
-	// Batch-load ALL source packages in a single packages.Load call.
-	// This is the key optimization: the Go toolchain resolves the shared
-	// dependency graph once instead of N times.
+	// Batch-load source packages in a single packages.Load call.
+	// The Go toolchain resolves the shared dependency graph once.
 	pkgMap, err := pkg.LoadAll(importPaths)
 	if err != nil {
 		return errors.Wrap(err, "failed to batch-load source packages")
@@ -217,8 +280,8 @@ func (gc *GenerateCommand) runWithConfig(cfg *Config, stdout io.Writer) error {
 
 	// Process packages in parallel.
 	workers := runtime.NumCPU()
-	if workers > len(resolved) {
-		workers = len(resolved)
+	if workers > len(toProcess) {
+		workers = len(toProcess)
 	}
 	sem := make(chan struct{}, workers)
 
@@ -228,7 +291,7 @@ func (gc *GenerateCommand) runWithConfig(cfg *Config, stdout io.Writer) error {
 		firstErr error
 	)
 
-	for _, rp := range resolved {
+	for _, rp := range toProcess {
 		sourcePkg, ok := pkgMap[rp.ImportPath]
 		if !ok {
 			continue // package had load errors, skip
@@ -436,7 +499,10 @@ func (gc *GenerateCommand) generateFileDecorators(
 
 	// Skip write if output file already has identical content (avoids
 	// unnecessary rebuilds and file-system churn on repeated runs).
+	// Touch the mtime so incremental detection knows this output is current.
 	if existing, err := os.ReadFile(outFilePath); err == nil && bytes.Equal(existing, processed) {
+		now := time.Now()
+		os.Chtimes(outFilePath, now, now) //nolint: errcheck
 		return nil
 	}
 
@@ -553,6 +619,114 @@ func extractBodyOnly(content string) string {
 	}
 
 	return strings.Join(bodyLines, "\n")
+}
+
+// ---------------------------------------------------------------------------
+// Incremental generation helpers
+// ---------------------------------------------------------------------------
+
+// findModuleRoot walks up from startDir to find go.mod and returns the
+// directory containing it (module root) and the module path declared in it.
+func findModuleRoot(startDir string) (rootDir, modulePath string, err error) {
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", "", err
+	}
+
+	for {
+		gomod := filepath.Join(dir, "go.mod")
+		data, err := os.ReadFile(gomod)
+		if err == nil {
+			modPath := parseModulePath(data)
+			if modPath != "" {
+				return dir, modPath, nil
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // reached filesystem root
+		}
+		dir = parent
+	}
+	return "", "", errors.New("go.mod not found")
+}
+
+// parseModulePath extracts the module path from go.mod contents.
+func parseModulePath(gomod []byte) string {
+	for _, line := range strings.Split(string(gomod), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(line[len("module "):])
+		}
+	}
+	return ""
+}
+
+// importPathToDir converts a fully-qualified Go import path to a filesystem
+// directory by stripping the module prefix and joining with the module root.
+// Returns "" if the import path is not within the module.
+func importPathToDir(moduleRoot, modulePath, importPath string) string {
+	if !strings.HasPrefix(importPath, modulePath) {
+		return ""
+	}
+	rel := strings.TrimPrefix(importPath, modulePath)
+	return filepath.Join(moduleRoot, filepath.FromSlash(rel))
+}
+
+// fileModTime returns the modification time of a file, or zero time on error.
+func fileModTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+// newestTraceModTime returns the newest modification time among *_trace.go
+// files in dir. Returns zero time if the directory doesn't exist or has no
+// trace files.
+func newestTraceModTime(dir string) time.Time {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return time.Time{}
+	}
+	var newest time.Time
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), "_trace.go") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	return newest
+}
+
+// sourceNewerThan checks whether any non-test .go file in srcDir has a
+// modification time strictly after threshold.
+func sourceNewerThan(srcDir string, threshold time.Time) bool {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return true // can't read → assume changed
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return true
+		}
+		if info.ModTime().After(threshold) {
+			return true
+		}
+	}
+	return false
 }
 
 // minimalHeaderTemplate is used when generating individual interface bodies.
