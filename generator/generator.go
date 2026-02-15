@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/pkg/errors"
@@ -183,7 +184,9 @@ type processOutput struct {
 
 // PackageCache caches loaded packages and parsed ASTs to avoid redundant
 // work when multiple interfaces reference the same external packages.
+// All methods are safe for concurrent use by multiple goroutines.
 type PackageCache struct {
+	mu     sync.RWMutex
 	loaded map[string]*packages.Package
 	asts   map[string]*pkg.Package
 }
@@ -196,27 +199,50 @@ func NewPackageCache() *PackageCache {
 	}
 }
 
+// Seed pre-populates the cache with already-loaded packages (e.g. from batch loading).
+func (c *PackageCache) Seed(pkgs map[string]*packages.Package) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for path, p := range pkgs {
+		c.loaded[path] = p
+	}
+}
+
 func (c *PackageCache) load(path string) (*packages.Package, error) {
+	c.mu.RLock()
 	if p, ok := c.loaded[path]; ok {
+		c.mu.RUnlock()
 		return p, nil
 	}
+	c.mu.RUnlock()
+
 	p, err := pkg.Load(path)
 	if err != nil {
 		return nil, err
 	}
+
+	c.mu.Lock()
 	c.loaded[path] = p
+	c.mu.Unlock()
 	return p, nil
 }
 
 func (c *PackageCache) ast(fs *token.FileSet, p *packages.Package) (*pkg.Package, error) {
+	c.mu.RLock()
 	if a, ok := c.asts[p.PkgPath]; ok {
+		c.mu.RUnlock()
 		return a, nil
 	}
+	c.mu.RUnlock()
+
 	a, err := pkg.AST(fs, p)
 	if err != nil {
 		return nil, err
 	}
+
+	c.mu.Lock()
 	c.asts[p.PkgPath] = a
+	c.mu.Unlock()
 	return a, nil
 }
 

@@ -12,6 +12,9 @@ import (
 
 var errPackageNotFound = errors.New("package not found")
 
+// loadMode is the standard set of information requested from the Go toolchain.
+var loadMode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps
+
 type Package struct {
 	Name  string
 	Files map[string]*ast.File
@@ -19,7 +22,7 @@ type Package struct {
 
 // Load loads package by its import path
 func Load(path string) (*packages.Package, error) {
-	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps}
+	cfg := &packages.Config{Mode: loadMode}
 	pkgs, err := packages.Load(cfg, path)
 	if err != nil {
 		return nil, err
@@ -34,6 +37,31 @@ func Load(path string) (*packages.Package, error) {
 	}
 
 	return pkgs[0], nil
+}
+
+// LoadAll loads multiple packages in a single batch call.
+// This is significantly faster than calling Load in a loop because the Go
+// toolchain resolves the shared dependency graph once for all packages.
+// Packages that fail to load (e.g., no Go files) are silently omitted.
+func LoadAll(paths []string) (map[string]*packages.Package, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	cfg := &packages.Config{Mode: loadMode}
+	pkgs, err := packages.Load(cfg, paths...)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]*packages.Package, len(pkgs))
+	for _, p := range pkgs {
+		if len(p.Errors) > 0 {
+			continue
+		}
+		result[p.PkgPath] = p
+	}
+	return result, nil
 }
 
 // AST returns package's abstract syntax tree

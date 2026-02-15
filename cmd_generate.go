@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
+	"sync"
 	"text/template"
 	"unicode"
 
@@ -184,9 +186,25 @@ func (gc *GenerateCommand) runWithConfig(cfg *Config, stdout io.Writer) error {
 		return errors.Wrap(err, "failed to resolve packages from config")
 	}
 
-	// Shared resources across ALL packages in this run
+	// Collect all import paths for batch loading.
+	importPaths := make([]string, len(resolved))
+	for i, rp := range resolved {
+		importPaths[i] = rp.ImportPath
+	}
+
+	// Batch-load ALL source packages in a single packages.Load call.
+	// This is the key optimization: the Go toolchain resolves the shared
+	// dependency graph once instead of N times.
+	pkgMap, err := pkg.LoadAll(importPaths)
+	if err != nil {
+		return errors.Wrap(err, "failed to batch-load source packages")
+	}
+
+	// Shared resources across ALL packages in this run.
+	// token.FileSet is documented as safe for concurrent use.
 	sharedFS := token.NewFileSet()
 	pkgCache := generator.NewPackageCache()
+	pkgCache.Seed(pkgMap) // pre-populate cache with batch-loaded packages
 
 	headerTmpl, err := template.New("header").Funcs(helperFuncs).Parse(minimalHeaderTemplate)
 	if err != nil {
@@ -197,38 +215,63 @@ func (gc *GenerateCommand) runWithConfig(cfg *Config, stdout io.Writer) error {
 		return errors.Wrap(err, "failed to parse body template")
 	}
 
+	// Process packages in parallel.
+	workers := runtime.NumCPU()
+	if workers > len(resolved) {
+		workers = len(resolved)
+	}
+	sem := make(chan struct{}, workers)
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+
 	for _, rp := range resolved {
-		if err := gc.processPackage(rp, cfg, headerTmpl, bodyTmpl, sharedFS, pkgCache); err != nil {
-			return errors.Wrapf(err, "failed to generate for package %s", rp.ImportPath)
+		sourcePkg, ok := pkgMap[rp.ImportPath]
+		if !ok {
+			continue // package had load errors, skip
 		}
+
+		// Skip packages with no Go files (e.g. test-only / mock packages)
+		if len(sourcePkg.GoFiles) == 0 && len(sourcePkg.CompiledGoFiles) == 0 {
+			continue
+		}
+
+		wg.Add(1)
+		go func(rp ResolvedPackage, sourcePkg *packages.Package) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire worker slot
+			defer func() { <-sem }() // release worker slot
+
+			if err := gc.processPackage(rp, cfg, sourcePkg, headerTmpl, bodyTmpl, sharedFS, pkgCache); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = errors.Wrapf(err, "failed to generate for package %s", rp.ImportPath)
+				}
+				mu.Unlock()
+			}
+		}(rp, sourcePkg)
 	}
 
-	return nil
+	wg.Wait()
+	return firstErr
 }
 
 // processPackage generates tracing decorators for a single package from config.
+// sourcePackage must be pre-loaded (e.g. via batch loading).
 func (gc *GenerateCommand) processPackage(
 	rp ResolvedPackage,
 	cfg *Config,
+	sourcePackage *packages.Package,
 	headerTmpl *template.Template,
 	bodyTmpl *template.Template,
 	sharedFS *token.FileSet,
 	pkgCache *generator.PackageCache,
 ) error {
-	// Load source package
-	sourcePackage, err := pkg.Load(rp.ImportPath)
-	if err != nil {
-		return errors.Wrap(err, "failed to load source package")
-	}
-
-	// Skip packages with no Go files (e.g. test-only / mock packages discovered via "..." pattern)
-	if len(sourcePackage.GoFiles) == 0 && len(sourcePackage.CompiledGoFiles) == 0 {
-		return nil
-	}
-
 	// Parse AST
-	fset := token.NewFileSet()
-	astPkg, err := pkg.AST(fset, sourcePackage)
+	astPkg, err := pkg.AST(sharedFS, sourcePackage)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse source package AST")
 	}
