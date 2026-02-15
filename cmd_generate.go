@@ -109,6 +109,28 @@ func (gc *GenerateCommand) Run(args []string, stdout io.Writer) error {
 		return errors.Wrap(err, "failed to create output directory")
 	}
 
+	// Load destination package once (all output files share the same directory)
+	outPkgName := filepath.Base(outDir)
+	dstPackage, err := pkg.Load(outDir)
+	if err != nil {
+		// Destination package may not exist yet; fallback to output dir name.
+		dstPackage = &packages.Package{Name: outPkgName}
+	}
+
+	// Pre-parse templates once (they are the same for every interface)
+	headerTmpl, err := template.New("header").Funcs(helperFuncs).Parse(minimalHeaderTemplate)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse header template")
+	}
+	bodyTmpl, err := template.New("body").Funcs(helperFuncs).Parse(datadogTemplate)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse body template")
+	}
+
+	// Shared resources for all generators in this run
+	sharedFS := token.NewFileSet()
+	pkgCache := generator.NewPackageCache()
+
 	// Generate one output file per source file
 	wroteGoGenerate := false
 	for _, fg := range fileGroups {
@@ -118,7 +140,7 @@ func (gc *GenerateCommand) Run(args []string, stdout io.Writer) error {
 		// Only write //go:generate in the first output file
 		includeGoGenerate := !gc.noGenerate && !wroteGoGenerate
 
-		if err := gc.generateFileDecorators(sourcePackage, fg, outFilePath, includeGoGenerate); err != nil {
+		if err := gc.generateFileDecorators(sourcePackage, astPkg, dstPackage, headerTmpl, bodyTmpl, sharedFS, pkgCache, fg, outFilePath, includeGoGenerate); err != nil {
 			return errors.Wrapf(err, "failed to generate for %s", fg.FileName)
 		}
 
@@ -133,6 +155,12 @@ func (gc *GenerateCommand) Run(args []string, stdout io.Writer) error {
 // generateFileDecorators generates tracing decorators for all interfaces in a single source file.
 func (gc *GenerateCommand) generateFileDecorators(
 	sourcePackage *packages.Package,
+	sourcePackageAST *pkg.Package,
+	dstPackage *packages.Package,
+	headerTmpl *template.Template,
+	bodyTmpl *template.Template,
+	sharedFS *token.FileSet,
+	pkgCache *generator.PackageCache,
 	fg pkg.FileInterfaces,
 	outFilePath string,
 	includeGoGenerate bool,
@@ -157,7 +185,7 @@ func (gc *GenerateCommand) generateFileDecorators(
 	// Subsequent interfaces only contribute their struct/method bodies.
 	generatedAny := false
 	for _, iface := range fg.Interfaces {
-		genOutput, err := gc.generateInterfaceOutput(sourcePackage, iface.Name, outFilePath)
+		genOutput, err := gc.generateInterfaceOutput(sourcePackage, sourcePackageAST, dstPackage, headerTmpl, bodyTmpl, sharedFS, pkgCache, iface.Name, outFilePath)
 		if err != nil {
 			// Skip interfaces that cannot be generated (e.g., empty interfaces)
 			continue
@@ -184,6 +212,12 @@ func (gc *GenerateCommand) generateFileDecorators(
 		return errors.Wrapf(err, "failed to format generated code:\n%s", buf.String())
 	}
 
+	// Skip write if output file already has identical content (avoids
+	// unnecessary rebuilds and file-system churn on repeated runs).
+	if existing, err := os.ReadFile(outFilePath); err == nil && bytes.Equal(existing, processed) {
+		return nil
+	}
+
 	return gc.filepath.WriteFile(outFilePath, processed, 0664)
 }
 
@@ -191,19 +225,30 @@ func (gc *GenerateCommand) generateFileDecorators(
 // formatted Go file for a single interface.
 func (gc *GenerateCommand) generateInterfaceOutput(
 	sourcePackage *packages.Package,
+	sourcePackageAST *pkg.Package,
+	destinationPackage *packages.Package,
+	headerTmpl *template.Template,
+	bodyTmpl *template.Template,
+	sharedFS *token.FileSet,
+	pkgCache *generator.PackageCache,
 	interfaceName string,
 	outFilePath string,
 ) (string, error) {
 	options := generator.Options{
-		InterfaceName:         interfaceName,
-		OutputFile:            outFilePath,
-		SourcePackage:         sourcePackage.PkgPath,
-		SourcePackageInstance: sourcePackage,
-		Funcs:                 helperFuncs,
-		HeaderTemplate:        minimalHeaderTemplate,
-		BodyTemplate:          datadogTemplate,
-		Vars:                  make(map[string]interface{}),
-		HeaderVars:            make(map[string]interface{}),
+		InterfaceName:              interfaceName,
+		OutputFile:                 outFilePath,
+		SourcePackage:              sourcePackage.PkgPath,
+		SourcePackageInstance:      sourcePackage,
+		SourcePackageAST:           sourcePackageAST,
+		DestinationPackageInstance: destinationPackage,
+		SkipImportsProcessing:      true,
+		HeaderTemplateParsed:       headerTmpl,
+		BodyTemplateParsed:         bodyTmpl,
+		FileSet:                    sharedFS,
+		PackageCache:               pkgCache,
+		Funcs:                      helperFuncs,
+		Vars:                       make(map[string]interface{}),
+		HeaderVars:                 make(map[string]interface{}),
 	}
 
 	gen, err := generator.NewGenerator(options)

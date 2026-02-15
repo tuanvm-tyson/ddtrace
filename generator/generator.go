@@ -108,11 +108,17 @@ type Options struct {
 	//SourcePackageInstance is the already loaded package (optional)
 	SourcePackageInstance *packages.Package
 
+	//SourcePackageAST is the already parsed source package AST (optional)
+	SourcePackageAST *pkg.Package
+
 	//SourcePackageAlias is an import selector defauls is source package name
 	SourcePackageAlias string
 
 	//OutputFile name which is used to detect destination package name and also to fix imports in the resulting source
 	OutputFile string
+
+	//DestinationPackageInstance is the already loaded destination package (optional)
+	DestinationPackageInstance *packages.Package
 
 	//HeaderTemplate is used to generate package clause and comment over the generated source
 	HeaderTemplate string
@@ -132,6 +138,22 @@ type Options struct {
 	//LocalPrefix is a comma-separated string of import path prefixes, which, if set, instructs Process to sort the import
 	//paths with the given prefixes into another group after 3rd-party packages.
 	LocalPrefix string
+
+	//SkipImportsProcessing skips goimports on generated output.
+	//Useful when caller aggregates multiple generated snippets then formats once.
+	SkipImportsProcessing bool
+
+	//HeaderTemplateParsed is a pre-parsed header template (optional, avoids re-parsing)
+	HeaderTemplateParsed *template.Template
+
+	//BodyTemplateParsed is a pre-parsed body template (optional, avoids re-parsing)
+	BodyTemplateParsed *template.Template
+
+	//FileSet is a shared token.FileSet for AST parsing (optional, avoids creating new per generator)
+	FileSet *token.FileSet
+
+	//PackageCache is a shared cache for package loading and AST parsing (optional)
+	PackageCache *PackageCache
 }
 
 type methodsList map[string]Method
@@ -142,6 +164,7 @@ type processInput struct {
 	astPackage     *pkg.Package
 	targetName     string
 	genericParams  genericParams
+	pkgCache       *PackageCache
 }
 
 type targetProcessInput struct {
@@ -158,6 +181,45 @@ type processOutput struct {
 	imports      []*ast.ImportSpec
 }
 
+// PackageCache caches loaded packages and parsed ASTs to avoid redundant
+// work when multiple interfaces reference the same external packages.
+type PackageCache struct {
+	loaded map[string]*packages.Package
+	asts   map[string]*pkg.Package
+}
+
+// NewPackageCache returns an empty PackageCache.
+func NewPackageCache() *PackageCache {
+	return &PackageCache{
+		loaded: make(map[string]*packages.Package),
+		asts:   make(map[string]*pkg.Package),
+	}
+}
+
+func (c *PackageCache) load(path string) (*packages.Package, error) {
+	if p, ok := c.loaded[path]; ok {
+		return p, nil
+	}
+	p, err := pkg.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	c.loaded[path] = p
+	return p, nil
+}
+
+func (c *PackageCache) ast(fs *token.FileSet, p *packages.Package) (*pkg.Package, error) {
+	if a, ok := c.asts[p.PkgPath]; ok {
+		return a, nil
+	}
+	a, err := pkg.AST(fs, p)
+	if err != nil {
+		return nil, err
+	}
+	c.asts[p.PkgPath] = a
+	return a, nil
+}
+
 var errEmptyInterface = errors.New("interface has no methods")
 var errUnexportedMethod = errors.New("unexported method")
 
@@ -167,27 +229,45 @@ func NewGenerator(options Options) (*Generator, error) {
 		options.Funcs = make(template.FuncMap)
 	}
 
-	headerTemplate, err := template.New("header").Funcs(options.Funcs).Parse(options.HeaderTemplate)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse header template")
+	var headerTemplate *template.Template
+	if options.HeaderTemplateParsed != nil {
+		headerTemplate = options.HeaderTemplateParsed
+	} else {
+		var err error
+		headerTemplate, err = template.New("header").Funcs(options.Funcs).Parse(options.HeaderTemplate)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse header template")
+		}
 	}
 
-	bodyTemplate, err := template.New("body").Funcs(options.Funcs).Parse(options.BodyTemplate)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse body template")
+	var bodyTemplate *template.Template
+	if options.BodyTemplateParsed != nil {
+		bodyTemplate = options.BodyTemplateParsed
+	} else {
+		var err error
+		bodyTemplate, err = template.New("body").Funcs(options.Funcs).Parse(options.BodyTemplate)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse body template")
+		}
 	}
 
 	if options.Vars == nil {
 		options.Vars = make(map[string]interface{})
 	}
 
-	fs := token.NewFileSet()
+	var fs *token.FileSet
+	if options.FileSet != nil {
+		fs = options.FileSet
+	} else {
+		fs = token.NewFileSet()
+	}
 
 	var srcPackage *packages.Package
 	// Use the preloaded package if available, only load if not
 	if options.SourcePackageInstance != nil {
 		srcPackage = options.SourcePackageInstance
 	} else {
+		var err error
 		srcPackage, err = pkg.Load(options.SourcePackage)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to load source package")
@@ -199,14 +279,30 @@ func NewGenerator(options Options) (*Generator, error) {
 		dstPackagePath = "./" + dstPackagePath
 	}
 
-	dstPackage, err := loadDestinationPackage(dstPackagePath)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to load destination package: %s", dstPackagePath)
+	var dstPackage *packages.Package
+	if options.DestinationPackageInstance != nil {
+		dstPackage = options.DestinationPackageInstance
+	} else {
+		var err error
+		dstPackage, err = loadDestinationPackage(dstPackagePath)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to load destination package: %s", dstPackagePath)
+		}
 	}
 
-	srcPackageAST, err := pkg.AST(fs, srcPackage)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse source package")
+	var srcPackageAST *pkg.Package
+	if options.SourcePackageAST != nil {
+		// Shallow copy: share the heavy Files map but allow independent Name mutation.
+		srcPackageAST = &pkg.Package{
+			Name:  options.SourcePackageAST.Name,
+			Files: options.SourcePackageAST.Files,
+		}
+	} else {
+		var err error
+		srcPackageAST, err = pkg.AST(fs, srcPackage)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse source package")
+		}
 	}
 
 	var interfaceType string
@@ -229,6 +325,7 @@ func NewGenerator(options Options) (*Generator, error) {
 		currentPackage: srcPackage,
 		astPackage:     srcPackageAST,
 		targetName:     options.InterfaceName,
+		pkgCache:       options.PackageCache,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to parse interface declaration")
@@ -329,6 +426,11 @@ func (g Generator) Generate(w io.Writer) error {
 		return err
 	}
 
+	if g.Options.SkipImportsProcessing {
+		_, err = w.Write(buf.Bytes())
+		return err
+	}
+
 	imports.LocalPrefix = g.localPrefix
 	processedSource, err := imports.Process(g.Options.OutputFile, buf.Bytes(), nil)
 	if err != nil {
@@ -377,7 +479,7 @@ func findMethods(selectedType *ast.TypeSpec, input targetProcessInput) (methods 
 		}
 		srcPackagePath := findSourcePackage(ident, input.imports)
 
-		return getMethods(t, srcPackagePath)
+		return getMethods(t, srcPackagePath, input.processInput)
 	case *ast.Ident:
 		if t.Obj == nil {
 			return
@@ -390,14 +492,29 @@ func findMethods(selectedType *ast.TypeSpec, input targetProcessInput) (methods 
 	return
 }
 
-func getMethods(sel *ast.SelectorExpr, srcPackagePath string) (methods methodsList, err error) {
-	srcPkg, err := pkg.Load(srcPackagePath)
+func getMethods(sel *ast.SelectorExpr, srcPackagePath string, ctx processInput) (methods methodsList, err error) {
+	var srcPkg *packages.Package
+	if ctx.pkgCache != nil {
+		srcPkg, err = ctx.pkgCache.load(srcPackagePath)
+	} else {
+		srcPkg, err = pkg.Load(srcPackagePath)
+	}
 	if err != nil {
 		return nil, errors.Wrapf(err, "cant load %s package", srcPackagePath)
 	}
 
-	fs := token.NewFileSet()
-	srcAst, err := pkg.AST(fs, srcPkg)
+	// Use shared FileSet if available, otherwise create a new one
+	fs := ctx.fileSet
+	if fs == nil {
+		fs = token.NewFileSet()
+	}
+
+	var srcAst *pkg.Package
+	if ctx.pkgCache != nil {
+		srcAst, err = ctx.pkgCache.ast(fs, srcPkg)
+	} else {
+		srcAst, err = pkg.AST(fs, srcPkg)
+	}
 	if err != nil {
 		return nil, errors.Wrapf(err, "cant ast %s package", srcPackagePath)
 	}
@@ -407,6 +524,7 @@ func getMethods(sel *ast.SelectorExpr, srcPackagePath string) (methods methodsLi
 		currentPackage: srcPkg,
 		astPackage:     srcAst,
 		targetName:     sel.Sel.Name,
+		pkgCache:       ctx.pkgCache,
 	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to find target in %s package", srcPackagePath)
@@ -598,7 +716,12 @@ func processSelector(se *ast.SelectorExpr, input targetProcessInput) (methodsLis
 		return nil, fmt.Errorf("unable to find package %s", packageSelector)
 	}
 
-	astPkg, err := pkg.AST(input.fileSet, p)
+	var astPkg *pkg.Package
+	if input.pkgCache != nil {
+		astPkg, err = input.pkgCache.ast(input.fileSet, p)
+	} else {
+		astPkg, err = pkg.AST(input.fileSet, p)
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to import package")
 	}
@@ -609,6 +732,7 @@ func processSelector(se *ast.SelectorExpr, input targetProcessInput) (methodsLis
 		astPackage:     astPkg,
 		targetName:     selectedName,
 		genericParams:  input.genericParams,
+		pkgCache:       input.pkgCache,
 	})
 
 	return output.methods, err
