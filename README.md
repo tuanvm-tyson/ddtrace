@@ -43,11 +43,17 @@ go generate ./service/...
 // service/trace/interfaces_trace.go (auto-generated)
 package trace
 
+// Shared functional option types
+type TracingOption func(*tracingConfig)
+func WithSpanDecorator(f func(...)) TracingOption { ... }
+func WithSpanOptions(opts ...tracer.StartSpanOption) TracingOption { ... }
+
+// Per-interface decorators
 type UserServiceWithTracing struct { ... }
-func NewUserServiceWithTracing(base service.UserService, instance string, ...) { ... }
+func NewUserServiceWithTracing(base service.UserService, opts ...TracingOption) { ... }
 
 type OrderServiceWithTracing struct { ... }
-func NewOrderServiceWithTracing(base service.OrderService, instance string, ...) { ... }
+func NewOrderServiceWithTracing(base service.OrderService, opts ...TracingOption) { ... }
 ```
 
 4. Use the traced wrapper in your application:
@@ -56,7 +62,7 @@ func NewOrderServiceWithTracing(base service.OrderService, instance string, ...)
 import "myapp/service/trace"
 
 userSvc := service.NewUserServiceImpl(repo)
-tracedSvc := trace.NewUserServiceWithTracing(userSvc, "user-service")
+tracedSvc := trace.NewUserServiceWithTracing(userSvc)
 ```
 
 ## Usage
@@ -116,16 +122,67 @@ type OrderService interface { ... }     // generated
 - Errors are automatically tagged on the span when the last return value is `error`
 - Supports Go generics, embedded interfaces, and cross-package types
 
-## Custom Span Decorators
+## Global Defaults
 
-Add custom span attributes using the optional span decorator:
+Set package-level defaults once at startup -- they apply to ALL tracing decorators automatically:
 
 ```go
-tracedSvc := trace.NewUserServiceWithTracing(userSvc, "user-service",
-    func(span ddtrace.Span, params, results map[string]interface{}) {
+import "myapp/service/trace"
+
+func main() {
+    // Set global context decorator -- extracts request-scoped values for ALL spans
+    trace.SetDefaultContextDecorator(func(ctx context.Context, span ddtrace.Span) {
+        if userID := auth.GetUserID(ctx); userID != "" {
+            span.SetTag("user.id", userID)
+        }
+        if tenantID := auth.GetTenantID(ctx); tenantID != "" {
+            span.SetTag("tenant.id", tenantID)
+        }
+    })
+
+    // Set global span options -- applied to ALL spans
+    trace.SetDefaultSpanOptions(tracer.ServiceName("my-service"))
+
+    // Create decorators with NO options -- globals are applied automatically
+    tracedUserSvc := trace.NewUserServiceWithTracing(userSvc)
+    tracedOrderSvc := trace.NewOrderServiceWithTracing(orderSvc)
+}
+```
+
+## Functional Options
+
+The generated constructors use the functional options pattern for per-instance customization.
+Per-instance options layer on top of global defaults:
+
+```go
+// Simple usage - no options needed (global defaults apply)
+tracedSvc := trace.NewUserServiceWithTracing(userSvc)
+
+// With per-instance context decorator (runs after global context decorator)
+tracedSvc := trace.NewUserServiceWithTracing(userSvc,
+    trace.WithContextDecorator(func(ctx context.Context, span ddtrace.Span) {
+        span.SetTag("payment.gateway", "stripe")
+    }),
+)
+
+// With custom span decorator (for result-based tags)
+tracedSvc := trace.NewUserServiceWithTracing(userSvc,
+    trace.WithSpanDecorator(func(span ddtrace.Span, params, results map[string]interface{}) {
         if userID, ok := params["id"].(string); ok {
             span.SetTag("user.id", userID)
         }
-    },
+    }),
+)
+
+// With additional span options
+tracedSvc := trace.NewUserServiceWithTracing(userSvc,
+    trace.WithSpanOptions(tracer.ServiceName("user-service")),
+)
+
+// Combine multiple options
+tracedSvc := trace.NewUserServiceWithTracing(userSvc,
+    trace.WithSpanOptions(tracer.ServiceName("user-service")),
+    trace.WithSpanDecorator(myCustomDecorator),
+    trace.WithContextDecorator(myContextDecorator),
 )
 ```

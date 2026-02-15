@@ -89,24 +89,65 @@ import (
     "gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
-type UserServiceWithTracing struct {
-    UserService
-    _spanDecorator func(span ddtrace.Span, params, results map[string]interface{})
+// Package-level global defaults (generated once per file)
+var (
+    _globalContextDecorator func(ctx context.Context, span ddtrace.Span)
+    _globalSpanOpts         []tracer.StartSpanOption
+)
+
+func SetDefaultContextDecorator(f func(ctx context.Context, span ddtrace.Span)) {
+    _globalContextDecorator = f
 }
 
-func NewUserServiceWithTracing(base UserService, spanDecorator ...func(span ddtrace.Span, params, results map[string]interface{})) UserServiceWithTracing {
-    d := UserServiceWithTracing{UserService: base}
-    if len(spanDecorator) > 0 && spanDecorator[0] != nil {
-        d._spanDecorator = spanDecorator[0]
-    }
-    return d
+func SetDefaultSpanOptions(opts ...tracer.StartSpanOption) {
+    _globalSpanOpts = opts
+}
+
+// Shared functional option types (generated once per file)
+type TracingOption func(*tracingConfig)
+
+type tracingConfig struct {
+    spanDecorator    func(span ddtrace.Span, params, results map[string]interface{})
+    contextDecorator func(ctx context.Context, span ddtrace.Span)
+    spanOpts         []tracer.StartSpanOption
+}
+
+func WithSpanDecorator(f func(span ddtrace.Span, params, results map[string]interface{})) TracingOption {
+    return func(c *tracingConfig) { c.spanDecorator = f }
+}
+
+func WithContextDecorator(f func(ctx context.Context, span ddtrace.Span)) TracingOption {
+    return func(c *tracingConfig) { c.contextDecorator = f }
+}
+
+func WithSpanOptions(opts ...tracer.StartSpanOption) TracingOption {
+    return func(c *tracingConfig) { c.spanOpts = append(c.spanOpts, opts...) }
+}
+
+// Per-interface decorator
+type UserServiceWithTracing struct {
+    UserService
+    _cfg tracingConfig
+}
+
+func NewUserServiceWithTracing(base UserService, opts ...TracingOption) UserServiceWithTracing {
+    cfg := tracingConfig{}
+    for _, opt := range opts { opt(&cfg) }
+    cfg.spanOpts = append(_globalSpanOpts, cfg.spanOpts...)
+    return UserServiceWithTracing{UserService: base, _cfg: cfg}
 }
 
 func (_d UserServiceWithTracing) GetUser(ctx context.Context, id string) (u1 *User, err error) {
-    span, ctx := tracer.StartSpanFromContext(ctx, "UserService.GetUser")
+    span, ctx := tracer.StartSpanFromContext(ctx, "UserService.GetUser", _d._cfg.spanOpts...)
+    if _globalContextDecorator != nil {
+        _globalContextDecorator(ctx, span)
+    }
+    if _d._cfg.contextDecorator != nil {
+        _d._cfg.contextDecorator(ctx, span)
+    }
     defer func() {
-        if _d._spanDecorator != nil {
-            _d._spanDecorator(span, map[string]interface{}{"ctx": ctx, "id": id}, 
+        if _d._cfg.spanDecorator != nil {
+            _d._cfg.spanDecorator(span, map[string]interface{}{"ctx": ctx, "id": id}, 
                               map[string]interface{}{"u1": u1, "err": err})
         } else if err != nil {
             span.SetTag(ext.Error, err)
@@ -412,6 +453,17 @@ func main() {
     )
     defer tracer.Stop()
     
+    // Set global defaults ONCE -- applies to ALL tracing decorators
+    service.SetDefaultContextDecorator(func(ctx context.Context, span ddtrace.Span) {
+        if userID := auth.GetUserID(ctx); userID != "" {
+            span.SetTag("user.id", userID)
+        }
+        if tenantID := auth.GetTenantID(ctx); tenantID != "" {
+            span.SetTag("tenant.id", tenantID)
+        }
+    })
+    service.SetDefaultSpanOptions(tracer.ServiceName("user-service"))
+    
     // Build dependency graph
     db := database.Connect()
     cache := redis.NewClient()
@@ -421,16 +473,14 @@ func main() {
     userRepo := repository.NewUserRepository(db)
     userService := service.NewUserService(userRepo, cache, events)
     
-    // Wrap with tracing (one line per service!)
+    // Wrap with tracing (one line per service! -- globals apply automatically)
     tracedUserService := service.NewUserServiceWithTracing(userService)
     
-    // Optional: Add custom span decorator for business metrics
-    tracedUserService := service.NewUserServiceWithTracing(userService, 
-        func(span ddtrace.Span, params, results map[string]interface{}) {
-            if userID, ok := params["id"].(string); ok {
-                span.SetTag("user.id", userID)
-            }
-        },
+    // Optional: Per-instance custom decorator (runs after global)
+    tracedPaymentService := service.NewPaymentServiceWithTracing(paymentService, 
+        service.WithContextDecorator(func(ctx context.Context, span ddtrace.Span) {
+            span.SetTag("payment.gateway", "stripe")
+        }),
     )
     
     // Use in handlers
