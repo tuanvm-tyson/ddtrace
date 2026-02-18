@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"github.com/moneyforward/ddtrace/internal/scanner"
+	"github.com/tuanvm-tyson/ddtrace/internal/scanner"
 )
 
 // PackageCache caches loaded packages and parsed ASTs to avoid redundant

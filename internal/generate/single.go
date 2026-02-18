@@ -10,8 +10,8 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/tools/go/packages"
 
-	"github.com/moneyforward/ddtrace/internal/codegen"
-	"github.com/moneyforward/ddtrace/internal/scanner"
+	"github.com/tuanvm-tyson/ddtrace/internal/codegen"
+	"github.com/tuanvm-tyson/ddtrace/internal/scanner"
 )
 
 // runSinglePackage executes the legacy single-package generation flow.

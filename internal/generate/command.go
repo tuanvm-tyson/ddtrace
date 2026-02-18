@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/moneyforward/ddtrace/internal/cli"
-	"github.com/moneyforward/ddtrace/internal/config"
+	"github.com/tuanvm-tyson/ddtrace/internal/cli"
+	"github.com/tuanvm-tyson/ddtrace/internal/config"
 )
 
 // GenerateCommand implements cli.Command interface

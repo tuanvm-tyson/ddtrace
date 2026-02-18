@@ -7,8 +7,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/moneyforward/ddtrace/internal/cli"
-	"github.com/moneyforward/ddtrace/internal/generate"
+	"github.com/tuanvm-tyson/ddtrace/internal/cli"
+	"github.com/tuanvm-tyson/ddtrace/internal/generate"
 )
 
 func init() {

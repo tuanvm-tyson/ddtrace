@@ -14,9 +14,9 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/tools/go/packages"
 
-	"github.com/moneyforward/ddtrace/internal/codegen"
-	"github.com/moneyforward/ddtrace/internal/config"
-	"github.com/moneyforward/ddtrace/internal/scanner"
+	"github.com/tuanvm-tyson/ddtrace/internal/codegen"
+	"github.com/tuanvm-tyson/ddtrace/internal/config"
+	"github.com/tuanvm-tyson/ddtrace/internal/scanner"
 )
 
 // runWithConfig processes all packages defined in a .ddtrace.yaml config file.

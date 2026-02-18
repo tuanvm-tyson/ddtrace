@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
-	"github.com/moneyforward/ddtrace/internal/scanner"
+	"github.com/tuanvm-tyson/ddtrace/internal/scanner"
 )
 
 func Test_unquote(t *testing.T) {
@@ -597,8 +597,10 @@ func TestNewGenerator(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "failed to load source package",
-			options: func(t minimock.Tester) Options { return Options{HeaderTemplate: "", BodyTemplate: "", SourcePackage: "not-exist"} },
+			name: "failed to load source package",
+			options: func(t minimock.Tester) Options {
+				return Options{HeaderTemplate: "", BodyTemplate: "", SourcePackage: "not-exist"}
+			},
 			wantErr: true,
 		},
 		{

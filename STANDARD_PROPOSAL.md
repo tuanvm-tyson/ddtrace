@@ -475,7 +475,7 @@ After DDTrace:
 
 ### 9.2 Proposed Mitigations (Immediate)
 
-1. **Migrate repository** to `github.com/moneyforward/ddtrace`
+1. **Migrate repository** to `github.com/tuanvm-tyson/ddtrace`
 2. **Add CI verification** in project template: `make verify-generate`
 3. **Add `.gitattributes`** to mark generated files:
    ```
@@ -547,7 +547,7 @@ verify-generate: generate
 
 ```yaml
 - name: Install ddtrace
-  run: go install github.com/moneyforward/ddtrace/cmd/ddtrace@latest
+  run: go install github.com/tuanvm-tyson/ddtrace/cmd/ddtrace@latest
 
 - name: Verify generated tracing code
   run: make verify-generate
@@ -840,7 +840,7 @@ Càng nhiều services, càng nhiều effort để migrate. Adopt sớm = migrat
 | # | Decision Item | Recommended Action |
 |---|--------------|-------------------|
 | 1 | Adopt DDTrace as standard | **Approve** |
-| 2 | Migrate repo to `github.com/moneyforward/ddtrace` | **Approve** |
+| 2 | Migrate repo to `github.com/tuanvm-tyson/ddtrace` | **Approve** |
 | 3 | Include in CI/CD template | **Approve** |
 | 4 | Allocate 2 sprints for rollout | **Approve** |
 | 5 | Assign 2+ maintainers for the tool | **Approve** |
@@ -862,13 +862,13 @@ Càng nhiều services, càng nhiều effort để migrate. Adopt sớm = migrat
 ### A. Installation
 
 ```bash
-go install github.com/moneyforward/ddtrace/cmd/ddtrace@latest
+go install github.com/tuanvm-tyson/ddtrace/cmd/ddtrace@latest
 ```
 
 ### B. Runtime Library
 
 ```bash
-go get github.com/moneyforward/ddtrace/tracing@latest
+go get github.com/tuanvm-tyson/ddtrace/tracing@latest
 ```
 
 ### C. Manual Tracing Helpers Reference
@@ -917,7 +917,7 @@ packages:
 
 ### E. References
 
-- [DDTrace Repository](https://github.com/moneyforward/ddtrace)
+- [DDTrace Repository](https://github.com/tuanvm-tyson/ddtrace)
 - [DataDog Go Tracing Documentation](https://docs.datadoghq.com/tracing/setup_overview/setup/go/)
 - [Go Code Generation Best Practices](https://go.dev/blog/generate)
 - [Decorator Pattern in Go](https://refactoring.guru/design-patterns/decorator)

@@ -28,7 +28,7 @@ import(
 const datadogTemplate = `import (
     "context"
 
-    "github.com/moneyforward/ddtrace/tracing"
+    "github.com/tuanvm-tyson/ddtrace/tracing"
 )
 
 {{ $decorator := (or .Vars.DecoratorName (printf "%sWithTracing" .Interface.Name)) }}
