@@ -1,4 +1,4 @@
-package generator
+package codegen
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"text/template"
 
 	"github.com/pkg/errors"
@@ -18,8 +17,8 @@ import (
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
 
-	"github.com/tuanvm-tyson/ddtrace/pkg"
-	"github.com/tuanvm-tyson/ddtrace/printer"
+	"github.com/moneyforward/ddtrace/internal/printer"
+	"github.com/moneyforward/ddtrace/internal/scanner"
 )
 
 // Generator generates decorators for the interface types
@@ -39,11 +38,9 @@ type Generator struct {
 
 // TemplateInputs information passed to template for generation
 type TemplateInputs struct {
-	// Interface information for template
 	Interface TemplateInputInterface
-	// Vars additional vars to pass to the template, see Options.Vars
-	Vars    map[string]interface{}
-	Imports []string
+	Vars      map[string]interface{}
+	Imports   []string
 }
 
 // Import generates an import statement using a list of imports from the source file
@@ -86,75 +83,33 @@ func (t TemplateInputs) Import(imports ...string) string {
 
 // TemplateInputInterface subset of interface information used for template generation
 type TemplateInputInterface struct {
-	Name string
-	// Type of the interface, with package name qualifier (e.g. sort.Interface)
-	Type string
-	// Generics of the interface when using generics
+	Name     string
+	Type     string
 	Generics TemplateInputGenerics
-	// Methods name keyed map of method information
-	Methods map[string]Method
+	Methods  map[string]Method
 }
 
 // Options of the NewGenerator constructor
 type Options struct {
-	//InterfaceName is a name of interface type
-	InterfaceName string
-
-	//Imports from the file with interface definition
-	Imports []string
-
-	//SourcePackage is an import path or a relative path of the package that contains the source interface
-	SourcePackage string
-
-	//SourcePackageInstance is the already loaded package (optional)
-	SourcePackageInstance *packages.Package
-
-	//SourcePackageAST is the already parsed source package AST (optional)
-	SourcePackageAST *pkg.Package
-
-	//SourcePackageAlias is an import selector defauls is source package name
-	SourcePackageAlias string
-
-	//OutputFile name which is used to detect destination package name and also to fix imports in the resulting source
-	OutputFile string
-
-	//DestinationPackageInstance is the already loaded destination package (optional)
+	InterfaceName              string
+	Imports                    []string
+	SourcePackage              string
+	SourcePackageInstance      *packages.Package
+	SourcePackageAST           *scanner.Package
+	SourcePackageAlias         string
+	OutputFile                 string
 	DestinationPackageInstance *packages.Package
-
-	//HeaderTemplate is used to generate package clause and comment over the generated source
-	HeaderTemplate string
-
-	//BodyTemplate generates import section, decorator constructor and methods
-	BodyTemplate string
-
-	//Vars additional vars that are passed to the templates from the command line
-	Vars map[string]interface{}
-
-	//HeaderVars header specific variables
-	HeaderVars map[string]interface{}
-
-	//Funcs is a map of helper functions that can be used within a template
-	Funcs template.FuncMap
-
-	//LocalPrefix is a comma-separated string of import path prefixes, which, if set, instructs Process to sort the import
-	//paths with the given prefixes into another group after 3rd-party packages.
-	LocalPrefix string
-
-	//SkipImportsProcessing skips goimports on generated output.
-	//Useful when caller aggregates multiple generated snippets then formats once.
-	SkipImportsProcessing bool
-
-	//HeaderTemplateParsed is a pre-parsed header template (optional, avoids re-parsing)
-	HeaderTemplateParsed *template.Template
-
-	//BodyTemplateParsed is a pre-parsed body template (optional, avoids re-parsing)
-	BodyTemplateParsed *template.Template
-
-	//FileSet is a shared token.FileSet for AST parsing (optional, avoids creating new per generator)
-	FileSet *token.FileSet
-
-	//PackageCache is a shared cache for package loading and AST parsing (optional)
-	PackageCache *PackageCache
+	HeaderTemplate             string
+	BodyTemplate               string
+	Vars                       map[string]interface{}
+	HeaderVars                 map[string]interface{}
+	Funcs                      template.FuncMap
+	LocalPrefix                string
+	SkipImportsProcessing      bool
+	HeaderTemplateParsed       *template.Template
+	BodyTemplateParsed         *template.Template
+	FileSet                    *token.FileSet
+	PackageCache               *PackageCache
 }
 
 type methodsList map[string]Method
@@ -162,7 +117,7 @@ type methodsList map[string]Method
 type processInput struct {
 	fileSet        *token.FileSet
 	currentPackage *packages.Package
-	astPackage     *pkg.Package
+	astPackage     *scanner.Package
 	targetName     string
 	genericParams  genericParams
 	pkgCache       *PackageCache
@@ -180,70 +135,6 @@ type processOutput struct {
 	genericTypes genericTypes
 	methods      methodsList
 	imports      []*ast.ImportSpec
-}
-
-// PackageCache caches loaded packages and parsed ASTs to avoid redundant
-// work when multiple interfaces reference the same external packages.
-// All methods are safe for concurrent use by multiple goroutines.
-type PackageCache struct {
-	mu     sync.RWMutex
-	loaded map[string]*packages.Package
-	asts   map[string]*pkg.Package
-}
-
-// NewPackageCache returns an empty PackageCache.
-func NewPackageCache() *PackageCache {
-	return &PackageCache{
-		loaded: make(map[string]*packages.Package),
-		asts:   make(map[string]*pkg.Package),
-	}
-}
-
-// Seed pre-populates the cache with already-loaded packages (e.g. from batch loading).
-func (c *PackageCache) Seed(pkgs map[string]*packages.Package) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for path, p := range pkgs {
-		c.loaded[path] = p
-	}
-}
-
-func (c *PackageCache) load(path string) (*packages.Package, error) {
-	c.mu.RLock()
-	if p, ok := c.loaded[path]; ok {
-		c.mu.RUnlock()
-		return p, nil
-	}
-	c.mu.RUnlock()
-
-	p, err := pkg.Load(path)
-	if err != nil {
-		return nil, err
-	}
-
-	c.mu.Lock()
-	c.loaded[path] = p
-	c.mu.Unlock()
-	return p, nil
-}
-
-func (c *PackageCache) ast(fs *token.FileSet, p *packages.Package) (*pkg.Package, error) {
-	c.mu.RLock()
-	if a, ok := c.asts[p.PkgPath]; ok {
-		c.mu.RUnlock()
-		return a, nil
-	}
-	c.mu.RUnlock()
-
-	a, err := pkg.AST(fs, p)
-	if err != nil {
-		return nil, err
-	}
-
-	c.mu.Lock()
-	c.asts[p.PkgPath] = a
-	c.mu.Unlock()
-	return a, nil
 }
 
 var errEmptyInterface = errors.New("interface has no methods")
@@ -289,12 +180,11 @@ func NewGenerator(options Options) (*Generator, error) {
 	}
 
 	var srcPackage *packages.Package
-	// Use the preloaded package if available, only load if not
 	if options.SourcePackageInstance != nil {
 		srcPackage = options.SourcePackageInstance
 	} else {
 		var err error
-		srcPackage, err = pkg.Load(options.SourcePackage)
+		srcPackage, err = scanner.Load(options.SourcePackage)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to load source package")
 		}
@@ -316,16 +206,15 @@ func NewGenerator(options Options) (*Generator, error) {
 		}
 	}
 
-	var srcPackageAST *pkg.Package
+	var srcPackageAST *scanner.Package
 	if options.SourcePackageAST != nil {
-		// Shallow copy: share the heavy Files map but allow independent Name mutation.
-		srcPackageAST = &pkg.Package{
+		srcPackageAST = &scanner.Package{
 			Name:  options.SourcePackageAST.Name,
 			Files: options.SourcePackageAST.Files,
 		}
 	} else {
 		var err error
-		srcPackageAST, err = pkg.AST(fs, srcPackage)
+		srcPackageAST, err = scanner.AST(fs, srcPackage)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to parse source package")
 		}
@@ -399,9 +288,8 @@ func makeImports(imports []*ast.ImportSpec) []string {
 }
 
 func loadDestinationPackage(path string) (*packages.Package, error) {
-	dstPackage, err := pkg.Load(path)
+	dstPackage, err := scanner.Load(path)
 	if err != nil {
-		//using directory name as a package name
 		dstPackage, err = makePackage(path)
 	}
 
@@ -470,12 +358,12 @@ func (g Generator) Generate(w io.Writer) error {
 var errTargetNotFound = errors.New("target declaration not found")
 
 func findTarget(input processInput) (output processOutput, err error) {
-	ts, imports, types := iterateFiles(input.astPackage, input.targetName)
+	ts, imps, types := iterateFiles(input.astPackage, input.targetName)
 	if ts == nil {
 		return processOutput{}, errors.Wrap(errTargetNotFound, input.targetName)
 	}
 
-	output.imports = imports
+	output.imports = imps
 	output.genericTypes = buildGenericTypesFromSpec(ts, types, input.astPackage.Name)
 	output.methods, err = findMethods(ts, targetProcessInput{
 		processInput: input,
@@ -523,23 +411,22 @@ func getMethods(sel *ast.SelectorExpr, srcPackagePath string, ctx processInput) 
 	if ctx.pkgCache != nil {
 		srcPkg, err = ctx.pkgCache.load(srcPackagePath)
 	} else {
-		srcPkg, err = pkg.Load(srcPackagePath)
+		srcPkg, err = scanner.Load(srcPackagePath)
 	}
 	if err != nil {
 		return nil, errors.Wrapf(err, "cant load %s package", srcPackagePath)
 	}
 
-	// Use shared FileSet if available, otherwise create a new one
 	fs := ctx.fileSet
 	if fs == nil {
 		fs = token.NewFileSet()
 	}
 
-	var srcAst *pkg.Package
+	var srcAst *scanner.Package
 	if ctx.pkgCache != nil {
 		srcAst, err = ctx.pkgCache.ast(fs, srcPkg)
 	} else {
-		srcAst, err = pkg.AST(fs, srcPkg)
+		srcAst, err = scanner.AST(fs, srcPkg)
 	}
 	if err != nil {
 		return nil, errors.Wrapf(err, "cant ast %s package", srcPackagePath)
@@ -579,7 +466,7 @@ func findSourcePackage(ident *ast.Ident, imports []*ast.ImportSpec) string {
 	return ""
 }
 
-func iterateFiles(p *pkg.Package, name string) (selectedType *ast.TypeSpec, imports []*ast.ImportSpec, types []*ast.TypeSpec) {
+func iterateFiles(p *scanner.Package, name string) (selectedType *ast.TypeSpec, imports []*ast.ImportSpec, types []*ast.TypeSpec) {
 	for _, f := range p.Files {
 		if f != nil {
 			for _, ts := range typeSpecs(f) {
@@ -632,23 +519,18 @@ func getEmbeddedMethods(t ast.Expr, pr typePrinter, input targetProcessInput, ch
 func processEmbedded(t ast.Expr, pr typePrinter, input targetProcessInput, checkInterface bool) (genericParam genericParam, embeddedMethods methodsList, err error) {
 	var x ast.Expr
 	var hasGenericsParams bool
-	var genericParams genericParams
+	var gParams genericParams
 
 	switch v := t.(type) {
 	case *ast.IndexExpr:
 		x = v.X
 		hasGenericsParams = true
-		//	Don't check if embedded interface's generic params are also interfaces, e.g. given the interface:
-		//		type SomeInterface {
-		//	      EmbeddedGenericInterface[Bar]
-		//		}
-		//	we won't be checking if Bar is also an interface
 		genericParam, _, err = processEmbedded(v.Index, pr, input, false)
 		if err != nil {
 			return
 		}
 		if genericParam.Name != "" {
-			genericParams = append(genericParams, genericParam)
+			gParams = append(gParams, genericParam)
 		}
 
 	case *ast.IndexListExpr:
@@ -657,17 +539,12 @@ func processEmbedded(t ast.Expr, pr typePrinter, input targetProcessInput, check
 
 		if v.Indices != nil {
 			for _, index := range v.Indices {
-				//	Don't check if embedded interface's generic params are also interfaces, e.g. given the interface:
-				//		type SomeInterface {
-				//	      EmbeddedGenericInterface[Bar]
-				//		}
-				//	we won't be checking if Bar is also an interface
 				genericParam, _, err = processEmbedded(index, pr, input, false)
 				if err != nil {
 					return
 				}
 				if genericParam.Name != "" {
-					genericParams = append(genericParams, genericParam)
+					gParams = append(gParams, genericParam)
 				}
 			}
 		}
@@ -675,14 +552,14 @@ func processEmbedded(t ast.Expr, pr typePrinter, input targetProcessInput, check
 		x = v
 	}
 
-	input.genericParams = genericParams
+	input.genericParams = gParams
 	genericParam, embeddedMethods, err = getEmbeddedMethods(x, pr, input, checkInterface)
 	if err != nil {
 		return
 	}
 
 	if hasGenericsParams {
-		genericParam.Params = genericParams
+		genericParam.Params = gParams
 	}
 
 	return
@@ -742,11 +619,11 @@ func processSelector(se *ast.SelectorExpr, input targetProcessInput) (methodsLis
 		return nil, fmt.Errorf("unable to find package %s", packageSelector)
 	}
 
-	var astPkg *pkg.Package
+	var astPkg *scanner.Package
 	if input.pkgCache != nil {
 		astPkg, err = input.pkgCache.ast(input.fileSet, p)
 	} else {
-		astPkg, err = pkg.AST(input.fileSet, p)
+		astPkg, err = scanner.AST(input.fileSet, p)
 	}
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to import package")
@@ -764,8 +641,6 @@ func processSelector(se *ast.SelectorExpr, input targetProcessInput) (methodsLis
 	return output.methods, err
 }
 
-// mergeMethods merges two methods list. Retains overlapping methods from the
-// parent list
 func mergeMethods(methods, embeddedMethods methodsList) (methodsList, error) {
 	if methods == nil || embeddedMethods == nil {
 		return methods, nil
@@ -822,8 +697,8 @@ func findImportPathForName(name string, imports []*ast.ImportSpec, currentPackag
 		}
 	}
 
-	for path, pkg := range currentPackage.Imports {
-		if pkg.Name == name {
+	for path, p := range currentPackage.Imports {
+		if p.Name == name {
 			return path, nil
 		}
 	}

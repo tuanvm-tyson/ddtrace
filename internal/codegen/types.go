@@ -1,4 +1,4 @@
-package generator
+package codegen
 
 import (
 	"fmt"
@@ -89,7 +89,6 @@ func NewMethod(name string, fi *ast.Field, printer typePrinter, genericTypes gen
 
 	usedNames := map[string]bool{}
 
-	//Always name the last return parameter as an "err" if it's of type "error"
 	if f.Results != nil {
 		ident, ok := f.Results.List[len(f.Results.List)-1].Type.(*ast.Ident)
 		m.ReturnsError = ok && ident.Name == "error"
@@ -171,8 +170,6 @@ func makeParams(params *ast.FieldList, usedNames map[string]bool, printer typePr
 
 	result := []Param{}
 	for _, p := range params.List {
-		//for anonymous parameters we generate params and results names
-		//based on their type
 		if p.Names == nil {
 			param, err := NewParam("", p, usedNames, printer, genericTypes, genericParams)
 			if err != nil {
@@ -198,11 +195,11 @@ func typePrefix(e ast.Expr) string {
 	case *ast.SelectorExpr:
 		return typePrefix(t.Sel)
 	case *ast.StarExpr:
-		return typePrefix(t.X) + "p" //*string -> sp (string pointer)
+		return typePrefix(t.X) + "p"
 	case *ast.SliceExpr:
-		return typePrefix(t.X) + "s" //[]string -> ss (string slice)
+		return typePrefix(t.X) + "s"
 	case *ast.ArrayType:
-		return typePrefix(t.Elt) + "a" //[2]string -> sa (string array)
+		return typePrefix(t.Elt) + "a"
 	case *ast.MapType:
 		return "m"
 	case *ast.ChanType:
@@ -238,7 +235,6 @@ func (m Method) Call() string {
 }
 
 // Pass returns a return statement followed by the method call
-// If method does not have any results it returns a method call followed by return statement
 func (m Method) Pass(prefix string) string {
 	if len(m.Results) > 0 {
 		return "return " + prefix + m.Call()

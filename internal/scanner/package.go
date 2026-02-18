@@ -1,4 +1,4 @@
-package pkg
+package scanner
 
 import (
 	"errors"
@@ -12,7 +12,6 @@ import (
 
 var errPackageNotFound = errors.New("package not found")
 
-// loadMode is the standard set of information requested from the Go toolchain.
 var loadMode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps
 
 type Package struct {
@@ -40,9 +39,6 @@ func Load(path string) (*packages.Package, error) {
 }
 
 // LoadAll loads multiple packages in a single batch call.
-// This is significantly faster than calling Load in a loop because the Go
-// toolchain resolves the shared dependency graph once for all packages.
-// Packages that fail to load (e.g., no Go files) are silently omitted.
 func LoadAll(paths []string) (map[string]*packages.Package, error) {
 	if len(paths) == 0 {
 		return nil, nil

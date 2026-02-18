@@ -1,4 +1,4 @@
-package ddtrace
+package cli
 
 import (
 	"testing"

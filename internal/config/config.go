@@ -1,4 +1,4 @@
-package ddtrace
+package config
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const configFileName = ".ddtrace.yaml"
+const FileName = ".ddtrace.yaml"
 
 // Config represents the top-level .ddtrace.yaml configuration.
 type Config struct {
@@ -63,8 +63,8 @@ type ResolvedPackage struct {
 	Config PackageConfig
 }
 
-// LoadConfig reads and parses a .ddtrace.yaml file.
-func LoadConfig(path string) (*Config, error) {
+// Load reads and parses a .ddtrace.yaml file.
+func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read config file")
@@ -75,7 +75,6 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, errors.Wrap(err, "failed to parse config file")
 	}
 
-	// Apply defaults
 	if cfg.Output == "" {
 		cfg.Output = "trace"
 	}
@@ -83,23 +82,23 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// FindConfig walks up from the current working directory looking for .ddtrace.yaml.
+// Find walks up from the current working directory looking for .ddtrace.yaml.
 // Returns the absolute path if found, or empty string if not found.
-func FindConfig() string {
+func Find() string {
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
 
 	for {
-		candidate := filepath.Join(dir, configFileName)
+		candidate := filepath.Join(dir, FileName)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break // reached filesystem root
+			break
 		}
 		dir = parent
 	}
@@ -117,23 +116,17 @@ func (c *Config) ResolvePackages() ([]ResolvedPackage, error) {
 	var result []ResolvedPackage
 
 	for pattern, pkgCfg := range c.Packages {
-		// Ensure we have a non-nil config
 		if pkgCfg == nil {
 			pkgCfg = &PackageConfig{}
 		}
 
-		// Merge global defaults into package config
 		merged := c.mergePackageConfig(pkgCfg)
 
 		if strings.HasSuffix(pattern, "/...") {
-			// Recursive pattern: expand via go list
 			paths, err := goListPackages(pattern)
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to resolve pattern %q", pattern)
 			}
-			// Filter out sub-packages that should not contain source interfaces:
-			// - output directories (e.g. /trace) are always excluded automatically
-			// - user-defined exclude patterns from config (e.g. mock, dto)
 			outputSuffix := "/" + merged.Output
 			for _, p := range paths {
 				if strings.HasSuffix(p, outputSuffix) || strings.Contains(p, outputSuffix+"/") {
@@ -159,8 +152,7 @@ func (c *Config) ResolvePackages() ([]ResolvedPackage, error) {
 }
 
 // shouldExclude returns true if importPath contains a path segment matching
-// any entry in Config.Exclude. Matching is exact per segment: "mock" matches
-// "app/mock" and "app/mock/sub" but not "app/mockservice".
+// any entry in Config.Exclude. Matching is exact per segment.
 func (c *Config) shouldExclude(importPath string) bool {
 	for _, seg := range c.Exclude {
 		suffix := "/" + seg
@@ -171,7 +163,6 @@ func (c *Config) shouldExclude(importPath string) bool {
 	return false
 }
 
-// mergePackageConfig applies global defaults to a package config.
 func (c *Config) mergePackageConfig(pkgCfg *PackageConfig) PackageConfig {
 	merged := *pkgCfg
 	if merged.Output == "" {
@@ -180,7 +171,6 @@ func (c *Config) mergePackageConfig(pkgCfg *PackageConfig) PackageConfig {
 	return merged
 }
 
-// goListPackages uses `go list` to expand a package pattern.
 func goListPackages(pattern string) ([]string, error) {
 	cmd := exec.Command("go", "list", pattern)
 	var stdout, stderr bytes.Buffer

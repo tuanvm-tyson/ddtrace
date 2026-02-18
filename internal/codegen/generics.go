@@ -1,4 +1,4 @@
-package generator
+package codegen
 
 import (
 	"go/ast"
@@ -15,10 +15,7 @@ const (
 
 // TemplateInputGenerics subset of generics interface information used for template generation
 type TemplateInputGenerics struct {
-	// Types of the interface when using generics (e.g. [I, O any])
-	Types string
-
-	// Params of the interface when using generics (e.g. [I, O])
+	Types  string
 	Params string
 }
 

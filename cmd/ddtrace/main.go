@@ -7,16 +7,17 @@ import (
 	"io"
 	"os"
 
-	"github.com/tuanvm-tyson/ddtrace"
+	"github.com/moneyforward/ddtrace/internal/cli"
+	"github.com/moneyforward/ddtrace/internal/generate"
 )
 
 func init() {
-	ddtrace.RegisterCommand("gen", ddtrace.NewGenerateCommand())
+	cli.RegisterCommand("gen", generate.NewGenerateCommand())
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		if err := ddtrace.Usage(os.Stderr); err != nil {
+		if err := cli.Usage(os.Stderr); err != nil {
 			die(1, err.Error())
 		}
 		os.Exit(2)
@@ -36,13 +37,13 @@ func main() {
 		return
 	}
 
-	command := ddtrace.GetCommand(args[0])
+	command := cli.GetCommand(args[0])
 	if command == nil {
 		die(2, "ddtrace: unknown subcommand %q\nRun 'ddtrace help' for usage.", args[0])
 	}
 
 	if err := command.Run(args[1:], os.Stdout); err != nil {
-		if _, ok := err.(ddtrace.CommandLineError); ok {
+		if _, ok := err.(cli.CommandLineError); ok {
 			die(2, "%s\nRun 'ddtrace help %s' for usage.\n", err.Error(), args[0])
 		}
 		die(1, err.Error())
@@ -62,10 +63,10 @@ func help(args []string, w io.Writer) error {
 	}
 
 	if len(args) == 0 {
-		return ddtrace.Usage(w)
+		return cli.Usage(w)
 	}
 
-	command := ddtrace.GetCommand(args[0])
+	command := cli.GetCommand(args[0])
 	if command == nil {
 		return fmt.Errorf("ddtrace: unknown command %q\nRun 'ddtrace help' for usage", args[0])
 	}

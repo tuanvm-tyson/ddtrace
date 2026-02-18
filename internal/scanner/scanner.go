@@ -1,4 +1,4 @@
-package pkg
+package scanner
 
 import (
 	"go/ast"
@@ -12,13 +12,13 @@ const ignoreDirective = "//ddtrace:ignore"
 
 // InterfaceInfo represents a discovered interface in a source file.
 type InterfaceInfo struct {
-	Name string // Interface name (e.g., "UserService")
+	Name string
 }
 
 // FileInterfaces represents all non-ignored interfaces found in a single source file.
 type FileInterfaces struct {
-	FileName   string          // Base file name (e.g., "interfaces.go")
-	Interfaces []InterfaceInfo // Interfaces found in this file
+	FileName   string
+	Interfaces []InterfaceInfo
 }
 
 // ScanPackage scans all files in a package and returns interfaces grouped by file.
@@ -27,7 +27,6 @@ type FileInterfaces struct {
 func ScanPackage(p *Package) ([]FileInterfaces, error) {
 	var result []FileInterfaces
 
-	// Sort filenames for deterministic output
 	fileNames := make([]string, 0, len(p.Files))
 	for name := range p.Files {
 		fileNames = append(fileNames, name)
@@ -37,7 +36,6 @@ func ScanPackage(p *Package) ([]FileInterfaces, error) {
 	for _, fullPath := range fileNames {
 		baseName := filepath.Base(fullPath)
 
-		// Skip test files and previously generated trace files
 		if strings.HasSuffix(baseName, "_test.go") || strings.HasSuffix(baseName, "_trace.go") {
 			continue
 		}
@@ -61,8 +59,6 @@ func ScanPackage(p *Package) ([]FileInterfaces, error) {
 	return result, nil
 }
 
-// scanFile scans a single AST file for interface type declarations,
-// filtering out those marked with //ddtrace:ignore.
 func scanFile(f *ast.File) []InterfaceInfo {
 	var interfaces []InterfaceInfo
 
@@ -78,12 +74,10 @@ func scanFile(f *ast.File) []InterfaceInfo {
 				continue
 			}
 
-			// Only process interface types
 			if _, isIface := ts.Type.(*ast.InterfaceType); !isIface {
 				continue
 			}
 
-			// Check for //ddtrace:ignore in doc comments
 			if hasIgnoreDirective(gd.Doc) || hasIgnoreDirective(ts.Doc) {
 				continue
 			}
@@ -97,7 +91,6 @@ func scanFile(f *ast.File) []InterfaceInfo {
 	return interfaces
 }
 
-// hasIgnoreDirective checks whether a comment group contains //ddtrace:ignore.
 func hasIgnoreDirective(cg *ast.CommentGroup) bool {
 	if cg == nil {
 		return false

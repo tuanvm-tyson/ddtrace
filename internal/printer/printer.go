@@ -43,9 +43,9 @@ func (p *Printer) Print(node ast.Node) (string, error) {
 	return p.buf.String(), err
 }
 
-// PrintType prints node that represents a type, i.e. type of a function argument or a or struct field
+// PrintType prints node that represents a type, i.e. type of a function argument or a struct field.
 // If node references one of the types listed in p.types and srcPackageName is not empty
-// it adds source package selector to the type identifier
+// it adds source package selector to the type identifier.
 // PrintType returns error if the srcPackageName is not empty and the printed type is unexported.
 func (p *Printer) PrintType(node ast.Node) (string, error) {
 	defer p.buf.Reset()
@@ -138,9 +138,6 @@ func (p *Printer) printIdent(i *ast.Ident) (string, error) {
 
 		if i.Name == ts.Name.Name {
 			if len(p.typesPrefix) > 0 {
-				//destination file is in another package
-				//if the found type matches one of the types declared in a source package and
-				//this type is unexported
 				if []rune(ts.Name.Name)[0] == []rune(strings.ToLower(ts.Name.Name))[0] {
 					return "", errors.Wrap(errUnexportedType, ts.Name.Name)
 				}

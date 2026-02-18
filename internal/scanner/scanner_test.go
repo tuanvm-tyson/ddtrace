@@ -1,4 +1,4 @@
-package pkg
+package scanner
 
 import (
 	"go/ast"
@@ -74,7 +74,6 @@ type OrderService interface {
 }
 
 func TestScanPackage_IgnoreOnTypeSpec(t *testing.T) {
-	// Test ignore directive on TypeSpec.Doc (inside grouped type declaration)
 	p := parseSource(t, "service.go", `
 package testpkg
 
@@ -253,7 +252,6 @@ type UserRepository interface {
 	require.NoError(t, err)
 	require.Len(t, result, 2)
 
-	// Sorted by filename
 	assert.Equal(t, "interfaces.go", result[0].FileName)
 	assert.Len(t, result[0].Interfaces, 2)
 

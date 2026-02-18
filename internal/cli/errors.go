@@ -1,4 +1,4 @@
-package ddtrace
+package cli
 
 // CommandLineError is returned from the commands when invalid command line parameters are passed
 type CommandLineError string

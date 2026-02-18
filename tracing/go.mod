@@ -1,4 +1,4 @@
-module github.com/tuanvm-tyson/ddtrace/tracing
+module github.com/moneyforward/ddtrace/tracing
 
 go 1.23.0
 

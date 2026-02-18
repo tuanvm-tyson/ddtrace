@@ -1,4 +1,4 @@
-package ddtrace
+package cli
 
 import (
 	"bytes"
@@ -67,14 +67,20 @@ func TestBaseCommand_HelpMessage(t *testing.T) {
 	}
 }
 
+type stubCommand struct {
+	BaseCommand
+}
+
+func (s *stubCommand) Run(args []string, stdout io.Writer) error { return nil }
+
 func TestRegisterCommand(t *testing.T) {
-	cmd := &GenerateCommand{BaseCommand: BaseCommand{Flags: flag.NewFlagSet("flagset", flag.ContinueOnError)}}
+	cmd := &stubCommand{BaseCommand: BaseCommand{Flags: flag.NewFlagSet("flagset", flag.ContinueOnError)}}
 	RegisterCommand("TestRegisterCommand", cmd)
 	assert.NotNil(t, commands["TestRegisterCommand"])
 }
 
 func TestGetCommand(t *testing.T) {
-	commands["TestGetCommand"] = &GenerateCommand{}
+	commands["TestGetCommand"] = &stubCommand{}
 	assert.NotNil(t, GetCommand("TestGetCommand"))
 }
 
