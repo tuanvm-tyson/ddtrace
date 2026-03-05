@@ -1,13 +1,12 @@
 package config
 
 import (
-	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/pkg/errors"
+	"golang.org/x/mod/modfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -123,7 +122,7 @@ func (c *Config) ResolvePackages() ([]ResolvedPackage, error) {
 		merged := c.mergePackageConfig(pkgCfg)
 
 		if strings.HasSuffix(pattern, "/...") {
-			paths, err := goListPackages(pattern)
+			paths, err := expandWildcardPackages(pattern)
 			if err != nil {
 				return nil, errors.Wrapf(err, "failed to resolve pattern %q", pattern)
 			}
@@ -171,22 +170,81 @@ func (c *Config) mergePackageConfig(pkgCfg *PackageConfig) PackageConfig {
 	return merged
 }
 
-func goListPackages(pattern string) ([]string, error) {
-	cmd := exec.Command("go", "list", "-find", pattern)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, errors.Wrapf(err, "go list %s: %s", pattern, stderr.String())
+// findModuleRoot walks up from cwd to find go.mod and returns (module path, directory).
+func findModuleRoot() (modulePath string, rootDir string, err error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", "", errors.Wrap(err, "failed to get working directory")
 	}
 
-	var paths []string
-	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			paths = append(paths, line)
+	for {
+		goModPath := filepath.Join(dir, "go.mod")
+		data, err := os.ReadFile(goModPath)
+		if err == nil {
+			mf, err := modfile.ParseLax(goModPath, data, nil)
+			if err != nil {
+				return "", "", errors.Wrap(err, "failed to parse go.mod")
+			}
+			return mf.Module.Mod.Path, dir, nil
 		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	return "", "", errors.New("go.mod not found")
+}
+
+// expandWildcardPackages finds all Go packages under the given import path prefix
+// by walking the filesystem instead of using `go list`.
+func expandWildcardPackages(pattern string) ([]string, error) {
+	prefix := strings.TrimSuffix(pattern, "/...")
+
+	modulePath, rootDir, err := findModuleRoot()
+	if err != nil {
+		return nil, err
+	}
+
+	if !strings.HasPrefix(prefix, modulePath) {
+		return nil, errors.Errorf("pattern %q is outside module %q", pattern, modulePath)
+	}
+
+	relPath := strings.TrimPrefix(prefix, modulePath)
+	relPath = strings.TrimPrefix(relPath, "/")
+	searchDir := filepath.Join(rootDir, relPath)
+
+	var paths []string
+	err = filepath.WalkDir(searchDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip inaccessible directories
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		// skip hidden directories and testdata
+		name := d.Name()
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || name == "testdata" || name == "vendor" {
+			return filepath.SkipDir
+		}
+		// check if directory contains .go files
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return nil
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") && !strings.HasSuffix(e.Name(), "_test.go") {
+				rel, _ := filepath.Rel(rootDir, path)
+				importPath := modulePath + "/" + filepath.ToSlash(rel)
+				paths = append(paths, importPath)
+				break
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to walk %s", searchDir)
 	}
 
 	return paths, nil
