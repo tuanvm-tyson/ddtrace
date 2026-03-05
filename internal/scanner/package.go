@@ -5,7 +5,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -58,6 +60,41 @@ func LoadAll(paths []string) (map[string]*packages.Package, error) {
 		result[p.PkgPath] = p
 	}
 	return result, nil
+}
+
+// BuildFromDir creates a *packages.Package from filesystem info without
+// invoking go list or downloading modules. It reads the directory to find
+// .go files and parses the package name from the first source file.
+func BuildFromDir(importPath, dir string) (*packages.Package, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var goFiles []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		goFiles = append(goFiles, filepath.Join(dir, name))
+	}
+
+	if len(goFiles) == 0 {
+		return nil, errPackageNotFound
+	}
+
+	// Parse just enough to get the package name.
+	f, err := parser.ParseFile(token.NewFileSet(), goFiles[0], nil, parser.PackageClauseOnly)
+	if err != nil {
+		return nil, err
+	}
+
+	return &packages.Package{
+		Name:    f.Name.Name,
+		PkgPath: importPath,
+		GoFiles: goFiles,
+	}, nil
 }
 
 // AST returns package's abstract syntax tree
