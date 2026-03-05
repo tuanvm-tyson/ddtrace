@@ -172,7 +172,7 @@ func (c *Config) mergePackageConfig(pkgCfg *PackageConfig) PackageConfig {
 }
 
 func goListPackages(pattern string) ([]string, error) {
-	cmd := exec.Command("go", "list", pattern)
+	cmd := exec.Command("go", "list", "-find", pattern)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
