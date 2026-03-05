@@ -2,7 +2,6 @@ package codegen
 
 import (
 	"bytes"
-	"fmt"
 	"go/ast"
 	"go/token"
 	"io"
@@ -614,9 +613,21 @@ func processSelector(se *ast.SelectorExpr, input targetProcessInput) (methodsLis
 		return nil, errors.Wrapf(err, "unable to find package %s", packageSelector)
 	}
 
-	p, ok := input.currentPackage.Imports[importPath]
-	if !ok {
-		return nil, fmt.Errorf("unable to find package %s", packageSelector)
+	// Try Imports map first (available when loaded with NeedDeps).
+	// Fall back to lazy loading via cache for filesystem-built packages.
+	var p *packages.Package
+	if input.currentPackage.Imports != nil {
+		p = input.currentPackage.Imports[importPath]
+	}
+	if p == nil {
+		if input.pkgCache != nil {
+			p, err = input.pkgCache.load(importPath)
+		} else {
+			p, err = scanner.Load(importPath)
+		}
+		if err != nil {
+			return nil, errors.Wrapf(err, "unable to load package %s", packageSelector)
+		}
 	}
 
 	var astPkg *scanner.Package
@@ -691,12 +702,26 @@ func processIdent(i *ast.Ident, input targetProcessInput, checkInterface bool) (
 var errUnknownSelector = errors.New("unknown selector")
 
 func findImportPathForName(name string, imports []*ast.ImportSpec, currentPackage *packages.Package) (string, error) {
+	// Check aliased imports from AST.
 	for _, i := range imports {
 		if i.Name != nil && i.Name.Name == name {
 			return unquote(i.Path.Value), nil
 		}
 	}
 
+	// Match non-aliased imports by last path segment (Go convention).
+	for _, i := range imports {
+		if i.Name != nil {
+			continue
+		}
+		path := unquote(i.Path.Value)
+		slash := strings.LastIndex(path, "/")
+		if name == path[slash+1:] {
+			return path, nil
+		}
+	}
+
+	// Fall back to Imports map if available (when loaded with NeedDeps).
 	for path, p := range currentPackage.Imports {
 		if p.Name == name {
 			return path, nil

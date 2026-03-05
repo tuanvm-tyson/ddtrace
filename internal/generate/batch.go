@@ -76,14 +76,22 @@ func (gc *GenerateCommand) runWithConfig(cfg *config.Config, configPath string, 
 		return nil
 	}
 
-	importPaths := make([]string, len(toProcess))
-	for i, rp := range toProcess {
-		importPaths[i] = rp.ImportPath
+	moduleRoot, modulePath, modErr := findModuleRoot(filepath.Dir(configPath))
+	if modErr != nil {
+		return errors.Wrap(modErr, "failed to find module root")
 	}
 
-	pkgMap, err := scanner.LoadAll(importPaths)
-	if err != nil {
-		return errors.Wrap(err, "failed to batch-load source packages")
+	pkgMap := make(map[string]*packages.Package, len(toProcess))
+	for _, rp := range toProcess {
+		dir := importPathToDir(moduleRoot, modulePath, rp.ImportPath)
+		if dir == "" {
+			continue
+		}
+		pkg, err := scanner.BuildFromDir(rp.ImportPath, dir)
+		if err != nil {
+			continue
+		}
+		pkgMap[rp.ImportPath] = pkg
 	}
 
 	sharedFS := token.NewFileSet()
@@ -182,10 +190,7 @@ func (gc *GenerateCommand) processPackage(
 	}
 
 	outPkgName := filepath.Base(outDir)
-	dstPackage, err := scanner.Load(outDir)
-	if err != nil {
-		dstPackage = &packages.Package{Name: outPkgName}
-	}
+	dstPackage := &packages.Package{Name: outPkgName}
 
 	noGenerate := cfg.NoGenerate
 
