@@ -563,73 +563,73 @@ verify-generate: generate
 
 ## 12. Frequently Asked Questions
 
-### Q1: "Tại sao phải dùng tool này? Tracing thủ công vẫn hoạt động tốt mà?"
+### Q1: "Why do we need this tool? Manual tracing works fine, doesn't it?"
 
-**A:** Tracing thủ công "hoạt động" nhưng không "hoạt động tốt" ở quy mô của chúng ta.
+**A:** Manual tracing "works" but doesn't "work well" at our scale.
 
-Khi có 5–10 services nhỏ, viết tay `tracer.StartSpanFromContext()` trong mỗi method là chấp nhận được. Nhưng khi scale lên hàng chục services với hàng trăm methods, vấn đề xuất hiện:
+With 5–10 small services, writing `tracer.StartSpanFromContext()` in each method by hand is acceptable. But when scaling to dozens of services with hundreds of methods, problems emerge:
 
-- **Coverage thấp**: Thực tế chỉ khoảng 30–50% methods được trace, vì developers thường "quên" hoặc "chưa kịp" thêm tracing cho method mới. Khi incident xảy ra, chúng ta không có trace ở chính chỗ cần debug.
-- **Inconsistency**: Mỗi người viết tracing một kiểu — khác tên span, khác cách tag error, khác cách handle context. Việc query và tạo dashboard trên DataDog trở nên khó khăn.
-- **Thời gian lãng phí**: Mỗi method mất 5–10 phút để thêm tracing đúng cách. Với 50 methods, đó là 4–8 giờ chỉ để viết boilerplate — thời gian có thể dùng để phát triển feature.
+- **Low coverage**: In practice only about 30–50% of methods get traced, because developers often "forget" or "haven't gotten around to" adding tracing for new methods. When an incident occurs, we don't have traces exactly where we need to debug.
+- **Inconsistency**: Everyone writes tracing differently — different span names, different error tagging, different context handling. Querying and building dashboards in DataDog becomes difficult.
+- **Wasted time**: Each method takes 5–10 minutes to trace correctly. With 50 methods, that's 4–8 hours spent just writing boilerplate — time that could be used to build features.
 
-DDTrace giải quyết cả 3 vấn đề: **100% coverage tự động, 100% consistency, 0 phút effort per method.**
+DDTrace solves all 3 problems: **100% automatic coverage, 100% consistency, 0 minutes of effort per method.**
 
 ---
 
-### Q2: "Tại sao dùng code generation? Nó thêm complexity vào build process."
+### Q2: "Why use code generation? It adds complexity to the build process."
 
-**A:** Code generation thực ra **giảm** tổng complexity — nó chỉ chuyển complexity từ runtime sang build-time.
+**A:** Code generation actually **reduces** total complexity — it simply moves complexity from runtime to build-time.
 
-So sánh 2 lựa chọn:
+Comparing the two options:
 
-| | Không code gen | Có code gen |
+| | Without code gen | With code gen |
 |---|---|---|
-| Mỗi method mới | Dev viết 5–10 dòng tracing | Dev không làm gì |
-| Mỗi PR | Review cả business logic lẫn tracing | Review chỉ business logic |
-| Build process | Đơn giản hơn | Thêm 1 step (`ddtrace gen`, chạy vài giây) |
-| Khi có bug tracing | Debug trong code business logic | Debug trong file generated riêng |
-| Khi interface thay đổi | Dev phải nhớ update tracing | CI tự báo lỗi nếu quên re-generate |
+| Each new method | Dev writes 5–10 lines of tracing | Dev does nothing |
+| Each PR | Review both business logic and tracing | Review business logic only |
+| Build process | Simpler | One extra step (`ddtrace gen`, takes seconds) |
+| When tracing has a bug | Debug inside business logic code | Debug in a separate generated file |
+| When interface changes | Dev must remember to update tracing | CI automatically fails if regeneration is missed |
 
-Build step thêm vào rất nhẹ (vài giây, incremental), nhưng loại bỏ hoàn toàn một loại công việc lặp đi lặp lại cho developer. Đây là trade-off tương tự như `mockery` cho mock generation hoặc `protoc` cho gRPC — **chúng ta đã chấp nhận code generation cho mock và protobuf, tracing không có lý do gì phải khác.**
+The added build step is very lightweight (seconds, incremental), but completely eliminates an entire category of repetitive work for developers. This is the same trade-off as `mockery` for mock generation or `protoc` for gRPC — **we have already accepted code generation for mocks and protobuf; there is no reason for tracing to be different.**
 
 ---
 
-### Q3: "Tại sao không dùng OpenTelemetry? Nó là industry standard và vendor-agnostic."
+### Q3: "Why not use OpenTelemetry? It's the industry standard and vendor-agnostic."
 
-**A:** OpenTelemetry giải quyết một vấn đề khác — nó là **protocol/SDK**, không phải **automation tool**.
+**A:** OpenTelemetry solves a different problem — it is a **protocol/SDK**, not an **automation tool**.
 
-Nếu chuyển sang OpenTelemetry:
-- Vẫn phải viết tracing thủ công trong mỗi method (`otel.Tracer().Start()`)
-- Vẫn có cùng vấn đề boilerplate, inconsistency, và coverage thấp
-- Thêm overhead từ translation layer (OTel → DataDog OTLP endpoint)
+Switching to OpenTelemetry would still require:
+- Writing tracing manually in every method (`otel.Tracer().Start()`)
+- The same problems: boilerplate, inconsistency, and low coverage
+- Additional overhead from a translation layer (OTel → DataDog OTLP endpoint)
 
-DDTrace và OpenTelemetry giải quyết **2 vấn đề khác nhau**:
+DDTrace and OpenTelemetry solve **2 different problems**:
 
 | | OpenTelemetry | DDTrace |
 |---|---|---|
-| Giải quyết | Vendor lock-in | Developer boilerplate |
-| Cách hoạt động | SDK/Protocol chuẩn | Code generation tự động |
-| Vẫn cần viết tay? | **Có** — mỗi method | **Không** — auto-generated |
+| Solves | Vendor lock-in | Developer boilerplate |
+| How it works | Standard SDK/Protocol | Automatic code generation |
+| Still requires manual work? | **Yes** — every method | **No** — auto-generated |
 
-Thực tế, nếu tương lai chúng ta muốn chuyển sang OTel, chỉ cần sửa internal của `tracing` library — **tất cả generated code và business logic không thay đổi.** Kiến trúc decorator pattern không phụ thuộc vào vendor.
+In practice, if we want to switch to OTel in the future, we only need to modify the internals of the `tracing` library — **all generated code and business logic remain unchanged.** The decorator pattern architecture is not vendor-dependent.
 
 ---
 
-### Q4: "Tại sao không chỉ dùng middleware? Gin middleware + GORM tracing đã đủ rồi."
+### Q4: "Why not just use middleware? Gin middleware + GORM tracing is already enough."
 
-**A:** Middleware chỉ cho bạn thấy **cái gì đến** và **cái gì đi ra**. Nó không cho bạn biết **chuyện gì xảy ra bên trong**.
+**A:** Middleware only shows you **what comes in** and **what goes out**. It does not tell you **what happens inside**.
 
-Ví dụ thực tế: Một request API mất 5 giây. Với chỉ middleware:
+A practical example: an API request takes 5 seconds. With middleware only:
 
 ```
 [HTTP Span: GET /api/users - 5000ms]
    └── [GORM Span: SELECT * FROM users - 50ms]
 ```
 
-Bạn biết request chậm, DB query nhanh — nhưng **4950ms còn lại ở đâu?** Không biết.
+You know the request is slow and the DB query is fast — but **where did the other 4950ms go?** Unknown.
 
-Với DDTrace decorators thêm vào:
+With DDTrace decorators added:
 
 ```
 [HTTP Span: GET /api/users - 5000ms]
@@ -642,27 +642,27 @@ Với DDTrace decorators thêm vào:
            └── [GORM: SELECT - 50ms]
 ```
 
-Bây giờ bạn thấy rõ: vấn đề là external API call trong `EnrichUserData`. **Middleware không bao giờ cho bạn visibility này.**
+Now you can see clearly: the problem is the external API call in `EnrichUserData`. **Middleware never gives you this visibility.**
 
 ---
 
-### Q5: "Tại sao phải dùng interface decorator pattern? Không phải mọi code đều dùng interface."
+### Q5: "Why use the interface decorator pattern? Not all code uses interfaces."
 
-**A:** Đúng — và đó là lý do DDTrace cung cấp **cả hai cách**: auto-generated decorators VÀ manual tracing helpers.
+**A:** Correct — and that is why DDTrace provides **both approaches**: auto-generated decorators AND manual tracing helpers.
 
-Trong kiến trúc Clean Architecture mà chúng ta đang dùng, **tất cả service boundaries đã là interfaces** — Repository, Service, Usecase. Đây chính là nơi DDTrace auto-generate, chiếm ~80% tracing needs.
+In the Clean Architecture we use, **all service boundaries are already interfaces** — Repository, Service, Usecase. This is where DDTrace auto-generates, covering ~80% of tracing needs.
 
-Với 20% còn lại (handlers, private functions, goroutines), chúng ta dùng manual helpers:
+For the remaining 20% (handlers, private functions, goroutines), we use manual helpers:
 
 ```go
-// Handler — không phải interface, dùng manual tracing
+// Handler — not an interface, use manual tracing
 func (h *UserHandler) GetUser(c *gin.Context) {
-    span, ctx := tracing.StartSpan(c.Request.Context()) // auto-detect name
+    span, ctx := tracing.StartSpan(c.Request.Context()) // auto-detects name
     defer span.Finish()
     // ...
 }
 
-// Private function — dùng manual tracing
+// Private function — use manual tracing
 func (s *serviceImpl) validateInput(ctx context.Context) (err error) {
     span, ctx := tracing.StartSpan(ctx)
     defer func() { tracing.FinishSpan(span, err) }()
@@ -670,50 +670,50 @@ func (s *serviceImpl) validateInput(ctx context.Context) (err error) {
 }
 ```
 
-Quan trọng: **manual helpers dùng cùng global defaults** (context decorator, span options) với generated decorators. Mọi spans đều consistent, dù auto-generated hay manual.
+Importantly: **manual helpers use the same global defaults** (context decorator, span options) as generated decorators. All spans are consistent, whether auto-generated or manual.
 
-Nếu codebase không dùng interface → DDTrace manual helpers vẫn hữu ích hơn raw DataDog SDK vì auto-detect span name và global defaults.
-
----
-
-### Q6: "Tại sao phải adopt toàn công ty? Mỗi team tự chọn cách trace riêng không được sao?"
-
-**A:** Để tracing thực sự có giá trị trong microservices, nó phải **consistent across services**.
-
-Khi một request đi qua Service A → Service B → Service C:
-- Nếu mỗi team dùng convention khác nhau, **DataDog traces trở thành một mớ hỗn độn** — khác tên span, khác tags, khác mức độ detail
-- Không thể tạo **cross-service dashboards** chuẩn
-- Không thể setup **alerts** dựa trên span naming patterns
-- Khi incident xảy ra, **debugging cross-service mất gấp đôi thời gian** vì phải hiểu convention của từng team
-
-Standardize tracing giống như standardize logging format — **giá trị ở mức tổ chức, không phải mức team.**
-
-Thêm nữa, khi tất cả services dùng cùng pattern:
-- SRE team có thể tạo **một bộ dashboard/alert template** áp dụng cho tất cả services
-- New team members chỉ cần học **một lần**
-- Code review standards **đồng nhất** across teams
+If a codebase doesn't use interfaces → DDTrace manual helpers are still more useful than the raw DataDog SDK because of auto-detected span names and global defaults.
 
 ---
 
-### Q7: "Tool này từ personal repo, dùng cho production có an toàn không?"
+### Q6: "Why must this be adopted company-wide? Can't each team choose their own tracing approach?"
 
-**A:** Đây là concern hợp lý, và chúng tôi đề xuất **migrate repo về company org** như điều kiện tiên quyết.
+**A:** For tracing to be genuinely valuable in microservices, it must be **consistent across services**.
 
-Sau khi migrate:
-- **Ownership**: Công ty own source code, không phụ thuộc cá nhân
-- **Maintainers**: Assign 2+ engineers làm maintainers
-- **CI/CD**: Tool có test suite, CI riêng, semver releases
-- **Code quality**: Generated code là **pure Go** — không có runtime magic, dễ audit
+When a request flows through Service A → Service B → Service C:
+- If each team uses different conventions, **DataDog traces become a mess** — different span names, different tags, different levels of detail
+- It becomes impossible to build standard **cross-service dashboards**
+- It becomes impossible to set up **alerts** based on span naming patterns
+- When an incident occurs, **cross-service debugging takes twice as long** because you must understand each team's conventions
 
-Quan trọng: **generated code không import tool** — nó chỉ import `tracing` library (lightweight, ~200 LOC). Ngay cả nếu tool ngừng phát triển, generated code và tracing library vẫn hoạt động bình thường. Tool chỉ cần chạy khi interface thay đổi.
+Standardizing tracing is like standardizing log format — **the value is at the organization level, not the team level.**
 
-So sánh với dependencies hiện tại: chúng ta đã dùng `mockery` (tool từ community) cho mock generation, `swaggo` cho API docs — DDTrace cùng category: **build-time tool, không phải runtime dependency.**
+Furthermore, when all services use the same pattern:
+- The SRE team can create **one set of dashboard/alert templates** that applies to all services
+- New team members only need to learn **once**
+- Code review standards are **uniform** across teams
 
 ---
 
-### Q8: "Generated code có ảnh hưởng performance không?"
+### Q7: "This tool is from a personal repo — is it safe to use in production?"
 
-**A:** **Không.** Generated code có performance **giống hệt** code viết tay.
+**A:** This is a valid concern, and we propose **migrating the repo to the company org** as a prerequisite.
+
+After migration:
+- **Ownership**: The company owns the source code, with no dependency on any individual
+- **Maintainers**: 2+ engineers assigned as maintainers
+- **CI/CD**: The tool has its own test suite, CI pipeline, and semver releases
+- **Code quality**: Generated code is **pure Go** — no runtime magic, easy to audit
+
+Importantly: **generated code does not import the tool** — it only imports the `tracing` library (lightweight, ~200 LOC). Even if the tool stops being maintained, the generated code and tracing library continue working normally. The tool only needs to run when interfaces change.
+
+Comparison with current dependencies: we already use `mockery` (a community tool) for mock generation and `swaggo` for API docs — DDTrace falls into the same category: **a build-time tool, not a runtime dependency.**
+
+---
+
+### Q8: "Does generated code affect performance?"
+
+**A:** **No.** Generated code has **identical** performance to hand-written code.
 
 DDTrace generates:
 
@@ -725,95 +725,95 @@ func (_d UserServiceWithTracing) GetUser(ctx context.Context, id string) (*User,
 }
 ```
 
-Đây chính xác là code mà developer sẽ viết tay. Không có:
+This is exactly the code a developer would write by hand. There is no:
 - ❌ Reflection
 - ❌ Dynamic proxy
 - ❌ Runtime code generation
-- ❌ Extra memory allocation (ngoài span, giống manual)
+- ❌ Extra memory allocation (beyond the span, same as manual)
 - ❌ Interface boxing/unboxing overhead
 
-Overhead duy nhất là **span creation** — và điều này **giống hệt nhau** dù bạn viết tay hay dùng generated code. Nếu bạn chấp nhận cost của manual tracing, bạn chấp nhận cost của DDTrace.
+The only overhead is **span creation** — and this is **identical** whether you write by hand or use generated code. If you accept the cost of manual tracing, you accept the cost of DDTrace.
 
 ---
 
-### Q9: "Tại sao không dùng gowrap hoặc các decorator generator khác?"
+### Q9: "Why not use gowrap or other decorator generators?"
 
-**A:** Chúng tôi đã evaluate các alternatives:
+**A:** We evaluated the alternatives:
 
-| Tool | Vấn đề |
-|------|--------|
-| **gowrap** | Generic decorator tool — cần viết template cho từng pattern. Không có tracing-specific features (global defaults, context decorator, manual helpers). Mỗi package cần `//go:generate` tag riêng. |
-| **go-decorator** | Reflection-based — runtime overhead, không type-safe. |
-| **Manual decorator** | Viết tay decorator cho từng interface — cũng là boilerplate, chỉ di chuyển từ method sang wrapper. |
+| Tool | Problem |
+|------|---------|
+| **gowrap** | Generic decorator tool — requires writing a template for each pattern. No tracing-specific features (global defaults, context decorator, manual helpers). Each package needs its own `//go:generate` tag. |
+| **go-decorator** | Reflection-based — runtime overhead, not type-safe. |
+| **Manual decorator** | Writing decorators by hand for each interface — still boilerplate, just moved from the method to the wrapper. |
 
-DDTrace được thiết kế **chuyên biệt cho DataDog tracing** nên có:
-- Config-driven batch generation (1 command cho toàn project)
-- Global defaults và context decorators
-- Manual tracing helpers cùng hệ sinh thái
-- Auto-detection span names
-- Incremental generation (chỉ re-generate khi source thay đổi)
-- Exclude patterns cho mock/dto directories
+DDTrace is designed **specifically for DataDog tracing**, so it provides:
+- Config-driven batch generation (1 command for the entire project)
+- Global defaults and context decorators
+- Manual tracing helpers in the same ecosystem
+- Auto-detected span names
+- Incremental generation (only regenerates when source changes)
+- Exclude patterns for mock/dto directories
 
-Nó là sự kết hợp giữa **code generation tool** và **tracing library** — không chỉ là generator đơn thuần.
+It is a combination of a **code generation tool** and a **tracing library** — not just a generator.
 
 ---
 
-### Q10: "Effort migrate các services hiện tại lớn không? Có cần refactor code?"
+### Q10: "Is the effort to migrate existing services large? Does it require refactoring code?"
 
-**A:** **Không cần refactor business logic.** Effort chủ yếu là ở DI wiring, và nó là additive.
+**A:** **No business logic refactoring is needed.** The effort is primarily in DI wiring, and it is purely additive.
 
-Cho một service điển hình, các bước là:
+For a typical service, the steps are:
 
 | Step | Effort | Description |
 |------|--------|-------------|
-| 1. Tạo `.ddtrace.yaml` | 5 phút | Copy template, điền package paths |
-| 2. Chạy `ddtrace gen` | Vài giây | Auto-generate tất cả trace files |
-| 3. Sửa DI/Registry | 1–2 giờ | Wrap base implementations với `*WithTracing` decorators |
-| 4. Set global defaults | 15 phút | Cấu hình context decorator và span options |
-| 5. Test | 1 giờ | Deploy staging, verify traces trên DataDog |
-| **Tổng** | **~3–4 giờ/service** | |
+| 1. Create `.ddtrace.yaml` | 5 min | Copy template, fill in package paths |
+| 2. Run `ddtrace gen` | Seconds | Auto-generates all trace files |
+| 3. Update DI/Registry | 1–2 hours | Wrap base implementations with `*WithTracing` decorators |
+| 4. Set global defaults | 15 min | Configure context decorator and span options |
+| 5. Test | 1 hour | Deploy to staging, verify traces in DataDog |
+| **Total** | **~3–4 hours/service** | |
 
-**Không có breaking change:**
-- Business logic: **không thay đổi**
-- Interfaces: **không thay đổi**
-- Tests: **không thay đổi**
-- HTTP/gRPC behavior: **không thay đổi**
+**No breaking changes:**
+- Business logic: **unchanged**
+- Interfaces: **unchanged**
+- Tests: **unchanged**
+- HTTP/gRPC behavior: **unchanged**
 
-Thay đổi duy nhất là ở DI layer — thay vì inject `userService`, bạn inject `trace.NewUserServiceWithTracing(userService)`. Và change này có thể rollback bất kỳ lúc nào bằng cách bỏ wrapper.
-
----
-
-### Q11: "Nếu sau này muốn đổi từ DataDog sang vendor khác thì sao?"
-
-**A:** Kiến trúc decorator pattern **tách biệt hoàn toàn** business logic và tracing implementation.
-
-Nếu đổi vendor:
-- Business logic: **không thay đổi** (không import DataDog)
-- Generated decorators: **không thay đổi** (chỉ import `tracing` library)
-- `tracing` library: **sửa internal** (thay DD SDK bằng OTel SDK hoặc vendor mới)
-- Re-build: tất cả services tự động dùng vendor mới
-
-Đây chính là lợi thế của abstraction layer. So sánh với manual tracing — nếu viết tay `tracer.StartSpanFromContext()` ở 500 chỗ, đổi vendor phải sửa **tất cả 500 chỗ**. Với DDTrace, sửa **1 chỗ** (tracing library).
+The only change is in the DI layer — instead of injecting `userService`, you inject `trace.NewUserServiceWithTracing(userService)`. And this change can be rolled back at any time by removing the wrapper.
 
 ---
 
-### Q12: "Tại sao bây giờ? Vì sao không tiếp tục cách hiện tại?"
+### Q11: "What if we want to switch from DataDog to another vendor in the future?"
 
-**A:** Ba lý do:
+**A:** The decorator pattern architecture **completely separates** business logic from tracing implementation.
 
-**1. Scale đang tăng, pain cũng tăng:**
-Số lượng services và methods tăng theo thời gian. Effort tracing thủ công tăng tuyến tính — mỗi service mới, mỗi method mới đều cần boilerplate. DDTrace biến effort này thành constant.
+If switching vendors:
+- Business logic: **unchanged** (does not import DataDog)
+- Generated decorators: **unchanged** (only import the `tracing` library)
+- `tracing` library: **update internals** (swap DD SDK for OTel SDK or a new vendor)
+- Rebuild: all services automatically use the new vendor
 
-**2. Observability gaps đang gây real cost:**
-Mỗi incident mà chúng ta thiếu trace ở internal layer → thêm 30–60 phút debug time. Với vài incidents mỗi tháng, đó là thời gian đáng kể. 100% coverage eliminates blind spots.
+This is the advantage of the abstraction layer. Compare with manual tracing — if `tracer.StartSpanFromContext()` is written by hand in 500 places, switching vendors requires changing **all 500 places**. With DDTrace, you change **1 place** (the tracing library).
 
-**3. Cost of migration chỉ tăng theo thời gian:**
-Càng nhiều services, càng nhiều effort để migrate. Adopt sớm = migrate ít services hơn + tất cả services mới đã follow standard từ đầu.
+---
 
-**ROI đơn giản:**
-- Cost: ~3–4 giờ per service migration (one-time)
-- Benefit: 4–8 giờ saved per service per quarter (ongoing) + significantly faster incident response
-- Break-even: **Trong quarter đầu tiên**
+### Q12: "Why now? Why not continue with the current approach?"
+
+**A:** Three reasons:
+
+**1. Scale is growing, and so is the pain:**
+The number of services and methods grows over time. The effort for manual tracing grows linearly — every new service and every new method requires boilerplate. DDTrace turns this effort into a constant.
+
+**2. Observability gaps are causing real costs:**
+Every incident where we lack a trace at the internal layer adds 30–60 minutes of debug time. With several incidents per month, that is significant. 100% coverage eliminates blind spots.
+
+**3. The cost of migration only grows over time:**
+The more services we have, the more effort to migrate. Adopting early = fewer services to migrate + all new services follow the standard from day one.
+
+**Simple ROI:**
+- Cost: ~3–4 hours per service migration (one-time)
+- Benefit: 4–8 hours saved per service per quarter (ongoing) + significantly faster incident response
+- Break-even: **Within the first quarter**
 
 ---
 
