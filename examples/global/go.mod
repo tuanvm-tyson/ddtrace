@@ -1,10 +1,10 @@
-module github.com/tuanvm-tyson/ddtrace/examples
+module github.com/tuanvm-tyson/ddtrace/examples/global
 
 go 1.24.4
 
 require gopkg.in/DataDog/dd-trace-go.v1 v1.74.2 // indirect
 
-replace github.com/tuanvm-tyson/ddtrace/tracing => ../tracing
+replace github.com/tuanvm-tyson/ddtrace/tracing => ../../tracing
 
 require github.com/tuanvm-tyson/ddtrace/tracing v0.0.0-00010101000000-000000000000
 

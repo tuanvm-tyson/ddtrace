@@ -7,19 +7,18 @@ package trace
 import (
 	"context"
 
+	_sourceGlobal "github.com/tuanvm-tyson/ddtrace/examples/global"
 	"github.com/tuanvm-tyson/ddtrace/tracing"
-
-	_sourceExamples "github.com/tuanvm-tyson/ddtrace/examples"
 )
 
 // SpeakWithTracing implements Speak interface instrumented with Datadog tracing
 type SpeakWithTracing struct {
-	_sourceExamples.Speak
+	_sourceGlobal.Speak
 	_cfg tracing.TracingConfig
 }
 
 // NewSpeakWithTracing returns SpeakWithTracing
-func NewSpeakWithTracing(base _sourceExamples.Speak, opts ...tracing.TracingOption) SpeakWithTracing {
+func NewSpeakWithTracing(base _sourceGlobal.Speak, opts ...tracing.TracingOption) SpeakWithTracing {
 	return SpeakWithTracing{
 		Speak: base,
 		_cfg:  tracing.NewTracingConfig(opts...),
@@ -39,12 +38,12 @@ func (_d SpeakWithTracing) SayHello(ctx context.Context, name string) (s1 string
 }
 
 type MoveWithTracing struct {
-	_sourceExamples.Move
+	_sourceGlobal.Move
 	_cfg tracing.TracingConfig
 }
 
 // NewMoveWithTracing returns MoveWithTracing
-func NewMoveWithTracing(base _sourceExamples.Move, opts ...tracing.TracingOption) MoveWithTracing {
+func NewMoveWithTracing(base _sourceGlobal.Move, opts ...tracing.TracingOption) MoveWithTracing {
 	return MoveWithTracing{
 		Move: base,
 		_cfg: tracing.NewTracingConfig(opts...),

@@ -7,9 +7,8 @@ package trace
 import (
 	"context"
 
-	"github.com/tuanvm-tyson/ddtrace/tracing"
-
 	_sourceExamples "github.com/tuanvm-tyson/ddtrace/examples"
+	"github.com/tuanvm-tyson/ddtrace/tracing"
 )
 
 // FlyWithTracing implements Fly interface instrumented with Datadog tracing
